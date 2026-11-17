@@ -101,6 +101,15 @@ pub enum Method {
         /// Discretisation points relative to the block centre.
         offsets: Vec<[f64; 3]>,
     },
+    /// Simple kriging with a known stationary `mean`.
+    SimpleKriging {
+        /// Variogram model.
+        variogram: Variogram,
+        /// Discretisation points relative to the block centre.
+        offsets: Vec<[f64; 3]>,
+        /// Known mean of the attribute.
+        mean: f64,
+    },
 }
 
 /// Neighbour selection rules.
@@ -147,6 +156,31 @@ pub struct Estimates {
     pub used: Vec<i64>,
     /// Mean anisotropic distance of the samples used.
     pub mean_distance: Vec<f64>,
+    /// Slope of regression of the true block value on its estimate,
+    /// `Cov(Z*, Z) / Var(Z*)` (NaN for non-kriging methods).
+    pub slope: Vec<f64>,
+    /// Kriging efficiency `(BV - KV) / BV` with `BV` the block variance
+    /// (NaN for non-kriging methods).
+    pub efficiency: Vec<f64>,
+}
+
+/// Per-target kriging output of [`estimate_one`].
+struct One {
+    value: f64,
+    variance: f64,
+    slope: f64,
+    efficiency: f64,
+}
+
+impl One {
+    fn plain(value: f64) -> Self {
+        Self {
+            value,
+            variance: f64::NAN,
+            slope: f64::NAN,
+            efficiency: f64::NAN,
+        }
+    }
 }
 
 fn select(p: &Problem<'_>, t: usize, rules: Selection, out: &mut Vec<(usize, f64)>) {
@@ -237,7 +271,50 @@ fn block_covariance(vg: &Variogram, offsets: &[[f64; 3]]) -> f64 {
     s / n
 }
 
+/// Mean covariance between sample `i` and the discretised target `t`.
 #[allow(clippy::cast_precision_loss)]
+fn point_block_covariance(
+    p: &Problem<'_>,
+    vg: &Variogram,
+    offsets: &[[f64; 3]],
+    i: usize,
+    t: usize,
+) -> f64 {
+    let mut s = 0.0;
+    for o in offsets {
+        let x = [
+            p.targets[t][0] + o[0],
+            p.targets[t][1] + o[1],
+            p.targets[t][2] + o[2],
+        ];
+        s += vg.covariance(sub(p.samples[i], x));
+    }
+    s / offsets.len() as f64
+}
+
+/// Kriging statistics from the weights' `w'c`, the Lagrange multiplier `mu`
+/// (0 for simple kriging) and the block variance `cbb`.
+fn kriging_stats(value: f64, cbb: f64, wc: f64, mu: f64) -> One {
+    // OK system: C w + mu 1 = c, so Var(Z*) = w'C w = w'c - mu and
+    // Cov(Z*, Z_v) = w'c; KV = C_vv - w'c - mu.
+    let variance = cbb - wc - mu;
+    let var_est = wc - mu;
+    One {
+        value,
+        variance,
+        slope: if var_est.abs() > 1e-300 {
+            wc / var_est
+        } else {
+            f64::NAN
+        },
+        efficiency: if cbb > 0.0 {
+            (cbb - variance) / cbb
+        } else {
+            f64::NAN
+        },
+    }
+}
+
 fn estimate_one(
     p: &Problem<'_>,
     t: usize,
@@ -245,12 +322,12 @@ fn estimate_one(
     cbb: f64,
     chosen: &[(usize, f64)],
     scratch: &mut (Vec<f64>, Vec<f64>),
-) -> (f64, f64) {
+) -> One {
     match method {
-        Method::Nearest => (p.values[chosen[0].0], f64::NAN),
+        Method::Nearest => One::plain(p.values[chosen[0].0]),
         Method::InverseDistance { power } => {
             if chosen[0].1 < 1e-12 {
-                return (p.values[chosen[0].0], f64::NAN);
+                return One::plain(p.values[chosen[0].0]);
             }
             let (mut num, mut den) = (0.0, 0.0);
             for &(i, d) in chosen {
@@ -258,7 +335,7 @@ fn estimate_one(
                 num += w * p.values[i];
                 den += w;
             }
-            (num / den, f64::NAN)
+            One::plain(num / den)
         }
         Method::OrdinaryKriging { variogram, offsets } => {
             let n = chosen.len();
@@ -275,28 +352,50 @@ fn estimate_one(
                     a[r * m + c] = cov;
                     a[c * m + r] = cov;
                 }
-                let mut s = 0.0;
-                for o in offsets {
-                    let x = [
-                        p.targets[t][0] + o[0],
-                        p.targets[t][1] + o[1],
-                        p.targets[t][2] + o[2],
-                    ];
-                    s += variogram.covariance(sub(p.samples[i], x));
-                }
-                b[r] = s / offsets.len() as f64;
+                b[r] = point_block_covariance(p, variogram, offsets, i, t);
             }
             let rhs: Vec<f64> = b[..n].to_vec();
             if !solve(a, b, m) {
-                return (f64::NAN, f64::NAN);
+                return One::plain(f64::NAN);
             }
             let mut value = 0.0;
-            let mut wb = 0.0;
+            let mut wc = 0.0;
             for (r, &(i, _)) in chosen.iter().enumerate() {
                 value += b[r] * p.values[i];
-                wb += b[r] * rhs[r];
+                wc += b[r] * rhs[r];
             }
-            (value, cbb - wb - b[n])
+            kriging_stats(value, cbb, wc, b[n])
+        }
+        Method::SimpleKriging {
+            variogram,
+            offsets,
+            mean,
+        } => {
+            let n = chosen.len();
+            let (a, b) = scratch;
+            a.clear();
+            a.resize(n * n, 0.0);
+            b.clear();
+            b.resize(n, 0.0);
+            for (r, &(i, _)) in chosen.iter().enumerate() {
+                for (c, &(j, _)) in chosen.iter().enumerate().skip(r) {
+                    let cov = variogram.covariance(sub(p.samples[i], p.samples[j]));
+                    a[r * n + c] = cov;
+                    a[c * n + r] = cov;
+                }
+                b[r] = point_block_covariance(p, variogram, offsets, i, t);
+            }
+            let rhs: Vec<f64> = b.clone();
+            if !solve(a, b, n) {
+                return One::plain(f64::NAN);
+            }
+            let mut value = *mean;
+            let mut wc = 0.0;
+            for (r, &(i, _)) in chosen.iter().enumerate() {
+                value += b[r] * (p.values[i] - mean);
+                wc += b[r] * rhs[r];
+            }
+            kriging_stats(value, cbb, wc, 0.0)
         }
     }
 }
@@ -305,7 +404,10 @@ fn estimate_one(
 pub fn estimate(p: &Problem<'_>, method: &Method, rules: Selection) -> Estimates {
     let m = p.targets.len();
     let cbb = match method {
-        Method::OrdinaryKriging { variogram, offsets } => block_covariance(variogram, offsets),
+        Method::OrdinaryKriging { variogram, offsets }
+        | Method::SimpleKriging {
+            variogram, offsets, ..
+        } => block_covariance(variogram, offsets),
         _ => f64::NAN,
     };
     let threads = thread::available_parallelism().map_or(1, std::num::NonZero::get);
@@ -315,6 +417,8 @@ pub fn estimate(p: &Problem<'_>, method: &Method, rules: Selection) -> Estimates
         variance: vec![f64::NAN; m],
         used: vec![0; m],
         mean_distance: vec![f64::NAN; m],
+        slope: vec![f64::NAN; m],
+        efficiency: vec![f64::NAN; m],
     };
     thread::scope(|scope| {
         let parts = out
@@ -323,8 +427,10 @@ pub fn estimate(p: &Problem<'_>, method: &Method, rules: Selection) -> Estimates
             .zip(out.variance.chunks_mut(chunk))
             .zip(out.used.chunks_mut(chunk))
             .zip(out.mean_distance.chunks_mut(chunk))
+            .zip(out.slope.chunks_mut(chunk))
+            .zip(out.efficiency.chunks_mut(chunk))
             .enumerate();
-        for (part, (((value, variance), used), mean_distance)) in parts {
+        for (part, (((((value, variance), used), mean_distance), slope), efficiency)) in parts {
             scope.spawn(move || {
                 let mut chosen = Vec::new();
                 let mut scratch = (Vec::new(), Vec::new());
@@ -334,9 +440,11 @@ pub fn estimate(p: &Problem<'_>, method: &Method, rules: Selection) -> Estimates
                     if chosen.is_empty() || chosen.len() < rules.min_samples {
                         continue;
                     }
-                    let (v, var) = estimate_one(p, t, method, cbb, &chosen, &mut scratch);
-                    value[local] = v;
-                    variance[local] = var;
+                    let one = estimate_one(p, t, method, cbb, &chosen, &mut scratch);
+                    value[local] = one.value;
+                    variance[local] = one.variance;
+                    slope[local] = one.slope;
+                    efficiency[local] = one.efficiency;
                     used[local] = i64::try_from(chosen.len()).unwrap_or(i64::MAX);
                     #[allow(clippy::cast_precision_loss)]
                     let n = chosen.len() as f64;
@@ -444,6 +552,70 @@ mod tests {
         );
         assert!((r.value[0] - 5.0).abs() < 1e-9);
         assert!(r.variance[0].abs() < 1e-9);
+        // A perfect estimate: slope of regression and efficiency are 1.
+        assert!((r.slope[0] - 1.0).abs() < 1e-9);
+        assert!((r.efficiency[0] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn simple_kriging_falls_back_to_the_mean_beyond_the_range() {
+        // Samples further than the range carry no covariance with the target:
+        // SK returns the known mean, KV = sill, efficiency 0.
+        let s = [[0.0, 0.0, 0.0], [50.0, 0.0, 0.0]];
+        let v = [5.0, 1.0];
+        let t = [[25.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+        let cand = [0, 1, 0, 1];
+        let dist = [2.5, 2.5, 0.0, 5.0];
+        let p = problem(&s, &v, &t, &cand, &dist, 2);
+        let method = Method::SimpleKriging {
+            variogram: vg(),
+            offsets: vec![[0.0; 3]],
+            mean: 2.0,
+        };
+        let rules = Selection {
+            min_samples: 1,
+            max_samples: 8,
+            max_per_hole: 0,
+        };
+        let r = estimate(&p, &method, rules);
+        assert!((r.value[0] - 2.0).abs() < 1e-12);
+        assert!((r.variance[0] - 1.0).abs() < 1e-12);
+        assert!(r.efficiency[0].abs() < 1e-12);
+        // At a sample SK is exact.
+        assert!((r.value[1] - 5.0).abs() < 1e-9);
+        assert!(r.variance[1].abs() < 1e-9);
+    }
+
+    #[test]
+    fn ordinary_kriging_slope_matches_its_definition() {
+        // Slope = w'c / (w'c - mu): check against an explicit 2-sample solve.
+        let s = [[0.0, 0.0, 0.0], [6.0, 0.0, 0.0]];
+        let v = [1.0, 3.0];
+        let t = [[9.0, 0.0, 0.0]];
+        let p = problem(&s, &v, &t, &[1, 0], &[0.3, 0.9], 2);
+        let method = Method::OrdinaryKriging {
+            variogram: vg(),
+            offsets: vec![[0.0; 3]],
+        };
+        let rules = Selection {
+            min_samples: 1,
+            max_samples: 8,
+            max_per_hole: 0,
+        };
+        let r = estimate(&p, &method, rules);
+        let g = vg();
+        let c01 = g.covariance([6.0, 0.0, 0.0]);
+        let c0t = g.covariance([9.0, 0.0, 0.0]);
+        let c1t = g.covariance([3.0, 0.0, 0.0]);
+        // [1 c01 1; c01 1 1; 1 1 0] closed form for two samples.
+        let w0 = 0.5 + (c0t - c1t) / (2.0 * (1.0 - c01));
+        let w1 = 1.0 - w0;
+        let mu = c0t - w0 - w1 * c01;
+        let wc = w0 * c0t + w1 * c1t;
+        assert!((r.value[0] - (w0 * 1.0 + w1 * 3.0)).abs() < 1e-9);
+        assert!((r.slope[0] - wc / (wc - mu)).abs() < 1e-9);
+        assert!((r.variance[0] - (1.0 - wc - mu)).abs() < 1e-9);
+        assert!((r.efficiency[0] - (1.0 - r.variance[0])).abs() < 1e-9);
     }
 
     #[test]

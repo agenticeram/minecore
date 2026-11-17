@@ -77,6 +77,7 @@ METHOD_TR = {
     Method.NEAREST: "En yakın komşu (NN)",
     Method.INVERSE_DISTANCE: "Ters mesafe ağırlıklı (IDW)",
     Method.ORDINARY_KRIGING: "Sıradan kriging (OK)",
+    Method.SIMPLE_KRIGING: "Basit kriging (SK)",
 }
 MODEL_TR = {
     ModelType.SPHERICAL: "Küresel",
@@ -461,6 +462,25 @@ class EstimationDialog(QDialog):
         self.max_s = QSpinBox(minimum=1, maximum=500, value=16)
         self.per_hole = QSpinBox(minimum=0, maximum=100, value=4)
         self.disc = QSpinBox(minimum=1, maximum=6, value=2)
+        self.sk_auto = QCheckBox("Örnek ortalaması")
+        self.sk_auto.setChecked(True)
+        self.sk_mean = _spin(0.0, -1e9, 1e9, 0.1, 4)
+        self.sk_auto.toggled.connect(lambda on: self.sk_mean.setEnabled(not on))
+        self.sk_mean.setEnabled(False)
+        # Search passes 2 and 3: ellipsoid x factor, own minimum sample count.
+        self.passes: list[tuple[QCheckBox, Any, QSpinBox]] = []
+        for number, factor, min_n in ((2, 2.0, 2), (3, 3.0, 1)):
+            on = QCheckBox(f"{number}. geçiş")
+            fac = _spin(factor, 1.0, 20.0, 0.5)
+            fac.setPrefix("elipsoid x ")
+            mn = QSpinBox(minimum=1, maximum=200, value=min_n)
+            mn.setPrefix("en az ")
+            mn.setSuffix(" örnek")
+            on.toggled.connect(fac.setEnabled)
+            on.toggled.connect(mn.setEnabled)
+            fac.setEnabled(False)
+            mn.setEnabled(False)
+            self.passes.append((on, fac, mn))
         self.output = QLineEdit()
         self.rock_only = QCheckBox("Yalnız kaya bloklarını kestir ('kaya' özniteliği)")
         self.domain = QComboBox()
@@ -475,10 +495,13 @@ class EstimationDialog(QDialog):
         form.addRow(from_vg)
         form.addRow("En az / en çok örnek", _row(self.min_s, self.max_s))
         form.addRow("Kuyu başına en çok (0 = sınırsız)", self.per_hole)
+        for on, fac, mn in self.passes:
+            form.addRow(on, _row(fac, mn))
         self.top_cut = _spin(0.0, 0.0, 1e9, 1.0, 4)
         self.top_cut.setSpecialValueText("yok")
         form.addRow("Üst kesme (top-cut) değeri", self.top_cut)
         form.addRow("Blok ayrıklaştırma (n x n x n)", self.disc)
+        form.addRow("SK ortalaması", _row(self.sk_auto, self.sk_mean))
         form.addRow("Sonuç özniteliği", self.output)
         form.addRow(self.rock_only)
         form.addRow("Domen katısı (örnek ve bloklar içeride)", self.domain)
@@ -497,14 +520,18 @@ class EstimationDialog(QDialog):
 
     def _sync(self) -> None:
         method = Method(self.method.currentData())
-        self.variogram.setEnabled(method is Method.ORDINARY_KRIGING)
+        self.variogram.setEnabled(method.is_kriging)
         self.power.setEnabled(method is Method.INVERSE_DISTANCE)
-        self.disc.setEnabled(method is Method.ORDINARY_KRIGING)
+        self.disc.setEnabled(method.is_kriging)
+        sk = method is Method.SIMPLE_KRIGING
+        self.sk_auto.setEnabled(sk)
+        self.sk_mean.setEnabled(sk and not self.sk_auto.isChecked())
         field = self.source.currentText().split(" / ")[-1]
         suffix = {
             Method.NEAREST: "nn",
             Method.INVERSE_DISTANCE: "id",
             Method.ORDINARY_KRIGING: "ok",
+            Method.SIMPLE_KRIGING: "sk",
         }
         self.output.setText(f"{field}_{suffix[method]}")
 
@@ -517,7 +544,7 @@ class EstimationDialog(QDialog):
         model = BlockModel.open(self.project, self.model.currentText())
         method = Method(self.method.currentData())
         variogram = None
-        if method is Method.ORDINARY_KRIGING:
+        if method.is_kriging:
             variogram = self.variograms.get(self.variogram.currentText())
             if variogram is None:
                 raise RuntimeError("Kriging için önce Variogram penceresinden bir model kaydedin.")
@@ -534,6 +561,13 @@ class EstimationDialog(QDialog):
         search = Search(
             self.search.value(), self.min_s.value(), self.max_s.value(), self.per_hole.value()
         )
+        passes = [search]
+        for on, fac, mn in self.passes:
+            if on.isChecked():
+                passes.append(search.expanded(fac.value(), min(mn.value(), self.max_s.value())))
+        mean = None
+        if method is Method.SIMPLE_KRIGING and not self.sk_auto.isChecked():
+            mean = self.sk_mean.value()
         attribute = self.output.text().strip()
         if not attribute:
             raise RuntimeError("Sonuç özniteliğine bir ad verin.")
@@ -552,19 +586,33 @@ class EstimationDialog(QDialog):
                 samples,
                 attribute,
                 method=method,
-                search=search,
+                search=passes,
                 variogram=variogram,
                 power=self.power.value(),
+                mean=mean,
                 discretisation=(n, n, n),
                 mask=mask,
                 top_cut=self.top_cut.value() or None,
                 progress=progress,
             ),
         )
-        return (
+        text = (
             f"'{attribute}' {model.grid.blocks:,} blok için hesaplandı; "
             f"{unestimated:,} blok arama yarıçapı dışında kaldı (kestirilmedi)."
         )
+        if len(passes) > 1:
+            done = BlockModel.open(self.project, model.name).values(f"{attribute}_pass")
+            counts = ", ".join(
+                f"{k}. geçiş {int(np.count_nonzero(done == k)):,}"
+                for k in range(1, len(passes) + 1)
+            )
+            text += f" Geçişlere göre blok sayısı: {counts}."
+        if method.is_kriging:
+            text += (
+                f" Kriging varyansı '{attribute}_kv', regresyon eğimi '{attribute}_sor',"
+                f" kriging verimliliği '{attribute}_ke' olarak yazıldı."
+            )
+        return text
 
 
 def _with_progress(parent: QWidget, title: str, job: Any) -> Any:
@@ -924,7 +972,12 @@ class ValidationDialog(QDialog):
         if name:
             attrs = BlockModel.open(self.project, name).attributes
             self.attribute.addItems(
-                [a for a in attrs if not a.endswith(("_n", "_dist", "_kv")) and "pit_" not in a]
+                [
+                    a
+                    for a in attrs
+                    if not a.endswith(("_n", "_dist", "_kv", "_sor", "_ke", "_pass"))
+                    and "pit_" not in a
+                ]
             )
 
     def run_swath(self) -> None:
@@ -966,7 +1019,7 @@ class ValidationDialog(QDialog):
         samples = _samples(self.db, self.source.currentText())
         method = Method(self.method.currentData())
         variogram = self.variograms.get(self.variogram.currentText())
-        if method is Method.ORDINARY_KRIGING and variogram is None:
+        if method.is_kriging and variogram is None:
             raise RuntimeError("Kriging için kayıtlı bir variogram gerekli.")
         search = Search(Ellipsoid.isotropic(self.radius.value()), 1, self.max_s.value())
         cv = _with_progress(
@@ -1012,16 +1065,25 @@ class ClassificationDialog(QDialog):
         form.addRow("Blok modeli", self.model)
         form.addRow("Kestirilmiş öznitelik", self.attribute)
         self.rows: list[tuple[Any, Any, Any]] = []
+        self.extra: list[tuple[QSpinBox, Any]] = []
         for n, (d, k, v) in enumerate(((25.0, 8, 0.4), (50.0, 4, 0.7), (100.0, 1, 0.0)), 1):
             dist = _spin(d, 0.1, 1e5, 5.0, 1)
             samples = QSpinBox(minimum=1, maximum=500, value=k)
             kv = _spin(v, 0.0, 10.0, 0.05, 2)
             kv.setSpecialValueText("yok")
+            max_pass = QSpinBox(minimum=0, maximum=3, value=0)
+            max_pass.setSpecialValueText("geçiş: yok")
+            max_pass.setPrefix("geçiş ≤ ")
+            slope = _spin(0.0, 0.0, 2.0, 0.05, 2)
+            slope.setSpecialValueText("SoR: yok")
+            slope.setPrefix("SoR ≥ ")
             self.rows.append((dist, samples, kv))
+            self.extra.append((max_pass, slope))
             form.addRow(
                 f"Kategori {n}: en çok ort. mesafe (m) / en az örnek / en çok KV/eşik",
                 _row(dist, samples, kv),
             )
+            form.addRow("      en çok arama geçişi / en az regresyon eğimi", _row(max_pass, slope))
         note = QLabel(
             "Kategoriler yalnızca geometrik/istatistiksel bir yardımcıdır; JORC, NI 43-101 "
             "veya benzeri kodlara göre kaynak sınıflandırması değildir. Bu sınıflandırma "
@@ -1050,15 +1112,31 @@ class ClassificationDialog(QDialog):
         has_kv = bool(name and attr) and (
             f"{attr}_kv" in BlockModel.open(self.project, name).attributes
         )
+        attrs = BlockModel.open(self.project, name).attributes if name and attr else {}
+        has_pass = f"{attr}_pass" in attrs
+        has_sor = f"{attr}_sor" in attrs
         for _, _, kv in self.rows:
             if not has_kv:
                 kv.setValue(0.0)
             kv.setEnabled(has_kv)
+        for p, sor in self.extra:
+            if not has_pass:
+                p.setValue(0)
+            if not has_sor:
+                sor.setValue(0.0)
+            p.setEnabled(has_pass)
+            sor.setEnabled(has_sor)
 
     def criteria(self) -> list[Criteria]:
         return [
-            Criteria(d.value(), s.value(), k.value() if k.value() > 0 else None)
-            for d, s, k in self.rows
+            Criteria(
+                d.value(),
+                s.value(),
+                k.value() if k.value() > 0 else None,
+                p.value() or None,
+                sor.value() if sor.value() > 0 else None,
+            )
+            for (d, s, k), (p, sor) in zip(self.rows, self.extra, strict=True)
         ]
 
     def run(self) -> None:

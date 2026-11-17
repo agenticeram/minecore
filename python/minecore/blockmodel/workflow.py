@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,9 +76,10 @@ def estimate_blocks(  # noqa: PLR0913 - options are keyword-only
     attribute: str,
     *,
     method: Method,
-    search: Search,
+    search: Search | Sequence[Search],
     variogram: VariogramModel | None = None,
     power: float = 2.0,
+    mean: float | None = None,
     discretisation: tuple[int, int, int] = (2, 2, 2),
     mask: npt.NDArray[np.bool_] | None = None,
     top_cut: float | None = None,
@@ -90,21 +92,30 @@ def estimate_blocks(  # noqa: PLR0913 - options are keyword-only
     ``top_cut`` caps sample values before estimation (outlier treatment).
     With a ``mask``, existing values of the attribute outside the mask are
     kept, so domains can be estimated one after another into one attribute.
+    ``search`` may be a sequence of passes (see :func:`estimation.estimate`);
+    the pass of each block is stored as ``<attr>_pass``. Kriging also stores
+    the kriging variance (``_kv``), slope of regression (``_sor``) and kriging
+    efficiency (``_ke``). ``mean`` is the simple-kriging mean (default: the
+    mean of the (top-cut) samples).
     """
+    passes = [search] if isinstance(search, Search) else list(search)
     grid = model.grid
     targets = grid.centroids()
     selected = np.ones(grid.blocks, bool) if mask is None else np.asarray(mask, bool)
     sample_values = samples.values if top_cut is None else np.minimum(samples.values, top_cut)
+    if method is Method.SIMPLE_KRIGING and mean is None:
+        mean = float(np.mean(sample_values)) if len(sample_values) else 0.0
     sub = estimate(
         samples.xyz,
         sample_values,
         targets[selected],
-        search,
+        passes,
         method,
         variogram=variogram,
         power=power,
+        mean=mean,
         block_size=grid.size,
-        discretisation=discretisation if method is Method.ORDINARY_KRIGING else (1, 1, 1),
+        discretisation=discretisation if method.is_kriging else (1, 1, 1),
         block_axes=grid.axes if grid.rotated else None,
         hole_ids=samples.hole_index,
         progress=progress,
@@ -115,27 +126,31 @@ def estimate_blocks(  # noqa: PLR0913 - options are keyword-only
             "unit": samples.unit,
             "method": method.value,
             "variogram": variogram.to_json() if variogram else None,
-            "search": {
-                "ranges": [search.ellipsoid.major, search.ellipsoid.semi, search.ellipsoid.minor],
-                "angles": [search.ellipsoid.azimuth, search.ellipsoid.dip, search.ellipsoid.rake],
-                "min_samples": search.min_samples,
-                "max_samples": search.max_samples,
-                "max_per_hole": search.max_per_hole,
-            },
+            "search": _search_info(passes[0]),
+            "passes": [_search_info(p) for p in passes],
             "power": power if method is Method.INVERSE_DISTANCE else None,
+            "mean": mean if method is Method.SIMPLE_KRIGING else None,
             "top_cut": top_cut,
         },
         f"{attribute}_n": {"unit": None},
         f"{attribute}_dist": {"unit": None},
+        f"{attribute}_pass": {"unit": None},
     }
+    assert result.pass_number is not None
     values = {
         attribute: result.value,
         f"{attribute}_n": result.samples_used.astype(np.float64),
         f"{attribute}_dist": result.mean_distance,
+        f"{attribute}_pass": np.where(result.pass_number > 0, result.pass_number, np.nan),
     }
-    if method is Method.ORDINARY_KRIGING:
+    if method.is_kriging:
+        assert result.slope is not None
+        assert result.efficiency is not None
         values[f"{attribute}_kv"] = result.variance
-        info[f"{attribute}_kv"] = {"unit": None}
+        values[f"{attribute}_sor"] = result.slope
+        values[f"{attribute}_ke"] = result.efficiency
+        for suffix in ("_kv", "_sor", "_ke"):
+            info[f"{attribute}{suffix}"] = {"unit": None}
     if mask is not None:
         # Estimating domain by domain into one attribute: keep the other domains.
         existing = model.attributes
@@ -152,6 +167,17 @@ def estimate_blocks(  # noqa: PLR0913 - options are keyword-only
     return sub.unestimated
 
 
+def _search_info(search: Search) -> dict[str, Any]:
+    e = search.ellipsoid
+    return {
+        "ranges": [e.major, e.semi, e.minor],
+        "angles": [e.azimuth, e.dip, e.rake],
+        "min_samples": search.min_samples,
+        "max_samples": search.max_samples,
+        "max_per_hole": search.max_per_hole,
+    }
+
+
 def _expand(sub: EstimationResult, selected: npt.NDArray[np.bool_]) -> EstimationResult:
     def full(values: Any, fill: Any) -> Any:
         out = np.full(len(selected), fill, dtype=np.asarray(values).dtype)
@@ -164,6 +190,9 @@ def _expand(sub: EstimationResult, selected: npt.NDArray[np.bool_]) -> Estimatio
         full(sub.samples_used, 0),
         full(sub.mean_distance, np.nan),
         sub.unestimated,
+        None if sub.slope is None else full(sub.slope, np.nan),
+        None if sub.efficiency is None else full(sub.efficiency, np.nan),
+        None if sub.pass_number is None else full(sub.pass_number, 0),
     )
 
 

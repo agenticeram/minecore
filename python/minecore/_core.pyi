@@ -156,7 +156,13 @@ def estimate_neighbourhood(
     nugget: float = 0.0,
     structures: list[tuple[str, float, list[list[float]]]] = ...,
     offsets: npt.ArrayLike | None = None,
+    mean: float = 0.0,
 ) -> tuple[
-    npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.int64], npt.NDArray[np.float64]
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.int64],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
 ]:
-    """Estimate targets from KD-tree candidates; returns value, variance, used, mean distance."""
+    """Estimate targets; returns value, variance, used, mean distance, slope, efficiency."""
