@@ -1,6 +1,6 @@
 # Session handoff
 
-Updated: 2026-11-11 (architect, thread "Prepare MineCore for safe pause").
+Updated: 2026-11-17 (architect, thread "Add next MineCore feature").
 Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 
 ## Owner direction (binding)
@@ -13,6 +13,13 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
+- 2026-11-17: PR #59 multi-pass estimation search (`<attr>_pass`), simple
+  kriging, slope of regression (`_sor`) and kriging efficiency (`_ke`) for
+  OK/SK, confidence criteria on max pass and min slope; GUI, CLI
+  (`bm estimate --method sk --pass F:N --mean`, `bm classify --max-pass
+  --min-slope`). Analytic Rust tests plus `tests/python/estimation/test_multipass.py`.
+  GUI not yet tried by the owner. Next in estimation: kriging neighbourhood
+  analysis (KNA), per-pass ellipsoid orientation, local-mean SK.
 - 2026-11-11 pause check: `main` = `d7e62fc` (PR #43) holds all work; CI and
   the Windows app build are green on it. Leftover `claude/project-thread-*`
   branches were squash-merged (#26, #37, #43) and hold nothing new. Open PRs

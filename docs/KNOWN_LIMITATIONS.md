@@ -25,8 +25,16 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 - Variogram GUI fits the first structure automatically; a second structure
   is entered by hand (no joint automatic fit of nested structures).
 - Validation: swath plots and leave-one-hole-out cross-validation exist
-  (isotropic search in the dialog); no kriging neighbourhood analysis,
-  no change-of-support checks yet. Swath sample means are not declustered.
+  (isotropic search in the dialog); no change-of-support checks yet. Swath
+  sample means are not declustered.
+- Multi-pass search (up to 3 passes in the GUI, `--pass` in the CLI): passes
+  2 and 3 only scale the first ellipsoid uniformly by a factor and set their own
+  minimum sample count. No per-pass orientation change and no per-pass
+  maximum-samples-per-hole change.
+- Simple kriging uses one global known mean (default: sample mean of the
+  top-cut samples). No local-mean or spatially varying mean kriging.
+- No kriging neighbourhood analysis (KNA) tool yet.
+- Negative kriging weights are not trimmed.
 - Estimation kernels run in Rust (`mc-core::kriging`) on all cores; neighbour
   search is a SciPy KD-tree. Measured on 4 cores (3000 samples, 16 per block,
   2x2x2 discretisation, release build): IDW about 230k blocks/s, ordinary
@@ -55,8 +63,9 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 
 - `blockmodel.classify` assigns categories from user thresholds on mean
   sample distance, sample count and kriging variance / total sill. It is a
-  screening aid, not a JORC/NI 43-101/PERC classification (rule 8); no
-  drill-spacing, slope-of-regression or smoothing of isolated blocks yet.
+  screening aid, not a JORC/NI 43-101/PERC classification (rule 8). Criteria
+  can also require a maximum search pass and a minimum slope of regression.
+  No drill-spacing or smoothing of isolated blocks yet.
 - Grade-tonnage reports can be restricted to an attribute range (domain,
   category, pit shell).
 

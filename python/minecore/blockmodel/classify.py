@@ -3,7 +3,9 @@
 Each category (1 = highest confidence) has thresholds on the estimation
 statistics stored with an estimate: mean distance to the samples used
 (``<attr>_dist``), number of samples (``<attr>_n``) and optionally the kriging
-variance relative to the variogram's total sill (``<attr>_kv``). A block gets
+variance relative to the variogram's total sill (``<attr>_kv``), the highest
+search pass allowed (``<attr>_pass``) and the lowest slope of regression
+(``<attr>_sor``). A block gets
 the first category whose every threshold it meets; estimated blocks that meet
 none get 0; unestimated blocks stay empty.
 
@@ -31,12 +33,18 @@ class Criteria:
     max_distance: float  # mean sample distance, m
     min_samples: int
     max_kv_ratio: float | None = None  # kriging variance / total sill
+    max_pass: int | None = None  # estimated in this search pass or earlier
+    min_slope: float | None = None  # slope of regression at least this
 
     def __post_init__(self) -> None:
         if not self.max_distance > 0 or self.min_samples < 1:
             raise BlockModelError("distance must be > 0 and samples >= 1")
         if self.max_kv_ratio is not None and not self.max_kv_ratio > 0:
             raise BlockModelError("kriging variance ratio must be > 0")
+        if self.max_pass is not None and self.max_pass < 1:
+            raise BlockModelError("search pass must be >= 1")
+        if self.min_slope is not None and not math.isfinite(self.min_slope):
+            raise BlockModelError("slope of regression must be finite")
 
 
 def total_sill(model: BlockModel, attribute: str) -> float | None:
@@ -46,11 +54,13 @@ def total_sill(model: BlockModel, attribute: str) -> float | None:
     return float(vg["nugget"]) + sum(float(s["sill"]) for s in vg["structures"])
 
 
-def categorise(
+def categorise(  # noqa: PLR0913, PLR0917 - optional statistics
     distance: Floats,
     samples: Floats,
     kv_ratio: Floats | None,
     criteria: Sequence[Criteria],
+    pass_number: Floats | None = None,
+    slope: Floats | None = None,
 ) -> Floats:
     """Category per block (1-based, 0 = none, NaN = not estimated)."""
     out = np.full(len(distance), np.nan)
@@ -63,6 +73,14 @@ def categorise(
             if kv_ratio is None:
                 raise BlockModelError("kriging variance criteria need an ordinary kriging estimate")
             ok &= np.isfinite(kv_ratio) & (kv_ratio <= c.max_kv_ratio)
+        if c.max_pass is not None:
+            if pass_number is None:
+                raise BlockModelError("search pass criteria need an estimate with search passes")
+            ok &= np.isfinite(pass_number) & (pass_number <= c.max_pass)
+        if c.min_slope is not None:
+            if slope is None:
+                raise BlockModelError("slope of regression criteria need a kriging estimate")
+            ok &= np.isfinite(slope) & (slope >= c.min_slope)
         out[ok] = float(n)
     return out
 
@@ -82,8 +100,18 @@ def classify(
         sill = total_sill(model, attribute)
         if sill is not None and math.isfinite(sill) and sill > 0:
             kv_ratio = model.values(f"{attribute}_kv") / sill
+
+    def optional(suffix: str) -> Floats | None:
+        name = f"{attribute}{suffix}"
+        return model.values(name) if name in attrs else None
+
     cat = categorise(
-        model.values(f"{attribute}_dist"), model.values(f"{attribute}_n"), kv_ratio, criteria
+        model.values(f"{attribute}_dist"),
+        model.values(f"{attribute}_n"),
+        kv_ratio,
+        criteria,
+        optional("_pass"),
+        optional("_sor"),
     )
     name = target or f"kat_{attribute}"
     model.set_attributes(

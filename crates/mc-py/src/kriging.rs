@@ -11,6 +11,8 @@ type Out<'py> = (
     Bound<'py, PyArray1<f64>>,
     Bound<'py, PyArray1<i64>>,
     Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
 );
 type F2<'py> = PyArrayLike2<'py, f64, AllowTypeChange>;
 
@@ -26,13 +28,18 @@ fn rows3(name: &str, a: &F2<'_>) -> PyResult<Vec<[f64; 3]>> {
 
 /// Estimates targets from KD-tree candidates (see `mc_core::kriging`).
 ///
-/// `method` is `"nearest"`, `"inverse_distance"` or `"ordinary_kriging"`.
+/// `method` is `"nearest"`, `"inverse_distance"`, `"ordinary_kriging"` or
+/// `"simple_kriging"` (with the known `mean`).
 /// `structures` holds `(shape, sill, transform)` with shape "spherical",
 /// "exponential" or "gaussian" and a 3 x 3 transform (axes / ranges).
-/// Returns `(value, variance, used, mean_distance)`.
+/// Returns `(value, variance, used, mean_distance, slope, efficiency)`.
 #[pyfunction]
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-#[pyo3(signature = (method, samples, values, targets, candidates, distances, *, min_samples, max_samples, max_per_hole = 0, holes = None, exclude_hole = None, power = 2.0, nugget = 0.0, structures = Vec::new(), offsets = None))]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+#[pyo3(signature = (method, samples, values, targets, candidates, distances, *, min_samples, max_samples, max_per_hole = 0, holes = None, exclude_hole = None, power = 2.0, nugget = 0.0, structures = Vec::new(), offsets = None, mean = 0.0))]
 pub fn estimate_neighbourhood<'py>(
     py: Python<'py>,
     method: &str,
@@ -50,6 +57,7 @@ pub fn estimate_neighbourhood<'py>(
     nugget: f64,
     structures: Vec<(String, f64, [[f64; 3]; 3])>,
     offsets: Option<F2<'py>>,
+    mean: f64,
 ) -> PyResult<Out<'py>> {
     let samples = rows3("samples", &samples)?;
     let targets = rows3("targets", &targets)?;
@@ -88,7 +96,7 @@ pub fn estimate_neighbourhood<'py>(
     let method = match method {
         "nearest" => Method::Nearest,
         "inverse_distance" => Method::InverseDistance { power },
-        "ordinary_kriging" => {
+        "ordinary_kriging" | "simple_kriging" => {
             let mut parsed = Vec::new();
             for (shape, sill, transform) in structures {
                 let shape = match shape.as_str() {
@@ -111,12 +119,23 @@ pub fn estimate_neighbourhood<'py>(
                 Some(o) => rows3("offsets", &o)?,
                 None => vec![[0.0; 3]],
             };
-            Method::OrdinaryKriging {
-                variogram: Variogram {
-                    nugget,
-                    structures: parsed,
-                },
-                offsets,
+            let variogram = Variogram {
+                nugget,
+                structures: parsed,
+            };
+            if method == "simple_kriging" {
+                if !mean.is_finite() {
+                    return Err(EstimationKernelError::new_err(
+                        "simple kriging needs a finite mean",
+                    ));
+                }
+                Method::SimpleKriging {
+                    variogram,
+                    offsets,
+                    mean,
+                }
+            } else {
+                Method::OrdinaryKriging { variogram, offsets }
             }
         }
         other => {
@@ -148,5 +167,7 @@ pub fn estimate_neighbourhood<'py>(
         result.variance.into_pyarray(py),
         result.used.into_pyarray(py),
         result.mean_distance.into_pyarray(py),
+        result.slope.into_pyarray(py),
+        result.efficiency.into_pyarray(py),
     ))
 }

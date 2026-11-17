@@ -42,12 +42,22 @@ GUIDE = """
    modelse içe aktarırken açısını girin.
 2. **Yüzey > Topoğrafya**: noktalardan veya kuyu ağızlarından yüzey; **kaya/hava** ile
    bloklar işaretlenir.
-3. **Blok Modeli > Tenör kestirimi**: NN, IDW veya sıradan kriging; isteğe bağlı domen
-   katısı, yalnız kaya blokları ve üst kesme. Domenleri sırayla aynı özniteliğe
-   kestirebilirsiniz.
+3. **Blok Modeli > Tenör kestirimi**: NN, IDW, sıradan kriging (OK) veya basit kriging
+   (SK; ortalama bilinen kabul edilir, varsayılanı üst kesilmiş örneklerin ortalamasıdır).
+   İsteğe bağlı domen katısı, yalnız kaya blokları ve üst kesme. Domenleri sırayla aynı
+   özniteliğe kestirebilirsiniz.
+   **Çok geçişli arama** (en fazla 3 geçiş): 2. ve 3. geçiş, 1. elipsoidin çarpanıyla
+   büyütülmüş elipsoidi ve kendi minimum örnek sayısını kullanır. Bir geçişte
+   kestirilemeyen bloklar bir sonraki geçişe bırakılır. Kestirilen geçiş numarası
+   `<öznitelik>_pass` alanına yazılır. CLI'da `--pass FAKTÖR:MİN_ÖRNEK` (tekrarlanabilir)
+   ve `--mean` seçenekleri aynı işi yapar.
+   OK ve SK'da her blok için `<öznitelik>_kv` (kriging varyansı), `<öznitelik>_sor`
+   (regresyon eğimi, w'c/(w'c - μ); SK'da 1) ve `<öznitelik>_ke` (kriging verimliliği,
+   (BV - KV)/BV; BV, ayrıklaştırmadan gelen blok varyansıdır) alanları yazılır.
 4. **Kestirim doğrulama**: swath grafikleri ve kuyu dışarıda bırakmalı çapraz doğrulama.
-5. **Güven kategorileri**: mesafe, örnek sayısı ve kriging varyansına göre kategori
-   (JORC/NI 43-101 sınıflandırması değildir; yetkin kişi gerekir).
+5. **Güven kategorileri**: mesafe, örnek sayısı ve kriging varyansına göre kategori.
+   İsteğe bağlı olarak **en fazla arama geçişi** ve **en düşük regresyon eğimi** koşulları
+   da eklenebilir (JORC/NI 43-101 sınıflandırması değildir; yetkin kişi gerekir).
 6. **Tenör-tonaj raporu**: tablo, eğri, Excel; domen/kategori/ocak filtresi.
 7. **Hesaplayıcı**: ifadeyle yeni öznitelik, örn. `where(lito == 2, 2.65, 2.5)` veya
    çok elementli NSR.

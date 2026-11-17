@@ -100,7 +100,12 @@ from minecore.underground.development import DeclineDesign, development_from_mod
 from minecore.underground.devschedule import DevRates, schedule_development
 from minecore.underground.stopes import stopes_from_model
 
-METHODS = {"nn": Method.NEAREST, "idw": Method.INVERSE_DISTANCE, "ok": Method.ORDINARY_KRIGING}
+METHODS = {
+    "nn": Method.NEAREST,
+    "idw": Method.INVERSE_DISTANCE,
+    "ok": Method.ORDINARY_KRIGING,
+    "sk": Method.SIMPLE_KRIGING,
+}
 
 
 def add_parsers(commands: Any) -> None:  # noqa: PLR0915 - argument tables
@@ -256,6 +261,17 @@ def add_parsers(commands: Any) -> None:  # noqa: PLR0915 - argument tables
     est.add_argument("--power", type=float, default=2.0)
     est.add_argument("--rock-only", action="store_true", help="only blocks with kaya=1")
     est.add_argument("--top-cut", type=float, help="cap sample values before estimation")
+    est.add_argument(
+        "--pass",
+        dest="passes",
+        action="append",
+        default=[],
+        metavar="FACTOR:MIN_SAMPLES",
+        help="extra search pass: ellipsoid x FACTOR, at least MIN_SAMPLES (repeatable)",
+    )
+    est.add_argument(
+        "--mean", type=float, default=None, help="simple kriging mean (default: sample mean)"
+    )
     sw = bm_cmds.add_parser("swath", help="swath plot: block estimate vs samples per slice")
     sw.add_argument("project")
     sw.add_argument("model")
@@ -294,6 +310,18 @@ def add_parsers(commands: Any) -> None:  # noqa: PLR0915 - argument tables
     cls.add_argument("--distance", type=float, nargs="+", required=True, help="per category")
     cls.add_argument("--samples", type=int, nargs="+", required=True, help="per category")
     cls.add_argument("--kv", type=float, nargs="+", help="max KV / sill per category (0 = none)")
+    cls.add_argument(
+        "--max-pass",
+        type=int,
+        nargs="+",
+        help="latest search pass allowed per category, 1 = first pass (0 = none)",
+    )
+    cls.add_argument(
+        "--min-slope",
+        type=float,
+        nargs="+",
+        help="min slope of regression per category (0 = none)",
+    )
 
     ug = commands.add_parser("ug", help="underground: stope envelope and stopes")
     ug.add_argument("project")
@@ -964,6 +992,15 @@ def surface_command(args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _search_pass(search: Search, spec: str) -> Search:
+    try:
+        factor_text, min_text = spec.split(":")
+        factor, min_samples = float(factor_text), int(min_text)
+    except ValueError as exc:
+        raise BlockModelError(f"--pass expects FACTOR:MIN_SAMPLES, got {spec!r}") from exc
+    return search.expanded(factor, min(min_samples, search.max_samples))
+
+
 def _bm_swath(project: Project, model: BlockModel, args: argparse.Namespace, out: TextIO) -> int:
     samples = interval_samples(_db(project), *_source(args.source))
     rows = swath(samples, model, args.attribute, "xyz".index(args.axis), args.width)
@@ -999,9 +1036,15 @@ def _bm_derive(project: Project, model: BlockModel, args: argparse.Namespace, ou
         kv = args.kv or [0.0] * n
         if len(args.samples) != n or len(kv) != n:
             raise BlockModelError("give one --distance, --samples (and --kv) per category")
+        passes = args.max_pass or [0] * n
+        slopes = args.min_slope or [0.0] * n
+        if any(len(x) != n for x in (args.samples, kv, passes, slopes)):
+            raise BlockModelError(
+                "give one --distance, --samples (and --kv, --max-pass, --min-slope) per category"
+            )
         criteria = [
-            Criteria(d, k, v if v > 0 else None)
-            for d, k, v in zip(args.distance, args.samples, kv, strict=True)
+            Criteria(d, k, v if v > 0 else None, p if p > 0 else None, s if s > 0 else None)
+            for d, k, v, p, s in zip(args.distance, args.samples, kv, passes, slopes, strict=True)
         ]
         counts = classify(model, args.attribute, criteria)
         for cat, count in counts.items():
@@ -1009,6 +1052,37 @@ def _bm_derive(project: Project, model: BlockModel, args: argparse.Namespace, ou
         out.write("note: not a JORC/NI 43-101 classification; needs a Competent Person\n")
         return 0
     raise AssertionError(args.bm_command)
+
+
+def _bm_estimate(project: Project, model: BlockModel, args: argparse.Namespace, out: TextIO) -> int:
+    samples = interval_samples(_db(project), *_source(args.source))
+    r = args.radius * 3 if len(args.radius) == 1 else args.radius
+    r = sorted(r, reverse=True)
+    search = Search(Ellipsoid(r[0], r[1], r[2], *args.angles), args.min, args.max, args.per_hole)
+    passes = [search] + [_search_pass(search, spec) for spec in args.passes]
+    variogram = load_variograms(project).get(args.variogram) if args.variogram else None
+    mask = model.values("kaya") > 0.5 if args.rock_only else None
+    missed = estimate_blocks(
+        model,
+        samples,
+        args.attribute,
+        method=METHODS[args.method],
+        search=passes,
+        variogram=variogram,
+        power=args.power,
+        mean=args.mean,
+        mask=mask,
+        top_cut=args.top_cut,
+    )
+    out.write(f"{args.attribute}: estimated; {missed} blocks without enough samples\n")
+    pass_attr = f"{args.attribute}_pass"
+    if len(passes) > 1:
+        # reopen: the estimate stored new metadata, the open handle is stale
+        pass_no = BlockModel.open(project, args.model).values(pass_attr)
+        for number in range(1, len(passes) + 1):
+            out.write(f"pass {number}: {int(np.sum(pass_no == number))} blocks\n")
+        out.write(f"not estimated: {int(np.sum(np.isnan(pass_no)))} blocks\n")
+    return 0
 
 
 def bm_command(args: argparse.Namespace, out: TextIO) -> int:
@@ -1053,27 +1127,7 @@ def bm_command(args: argparse.Namespace, out: TextIO) -> int:
             return 0
         model = BlockModel.open(project, args.model)
         if args.bm_command == "estimate":
-            samples = interval_samples(_db(project), *_source(args.source))
-            r = args.radius * 3 if len(args.radius) == 1 else args.radius
-            r = sorted(r, reverse=True)
-            search = Search(
-                Ellipsoid(r[0], r[1], r[2], *args.angles), args.min, args.max, args.per_hole
-            )
-            variogram = load_variograms(project).get(args.variogram) if args.variogram else None
-            mask = model.values("kaya") > 0.5 if args.rock_only else None
-            missed = estimate_blocks(
-                model,
-                samples,
-                args.attribute,
-                method=METHODS[args.method],
-                search=search,
-                variogram=variogram,
-                power=args.power,
-                mask=mask,
-                top_cut=args.top_cut,
-            )
-            out.write(f"{args.attribute}: estimated; {missed} blocks without enough samples\n")
-            return 0
+            return _bm_estimate(project, model, args, out)
         if args.bm_command in ("calc", "classify", "reblock", "swath"):
             return _bm_derive(project, model, args, out)
         density: float | str = _density(args.density)

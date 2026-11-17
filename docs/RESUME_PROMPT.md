@@ -1,7 +1,7 @@
 # MineCore — resume file (devam dosyası)
 
-Updated: 2026-11-11. Repository state at this date: `main` = commit `d7e62fc`
-(PR #43), CI green on Windows and Linux, tag `v0.1.0`.
+Updated: 2026-11-17. Repository state at this date: `main` includes
+PR #59 (multi-pass search, simple kriging, slope of regression), CI green on Windows and Linux, tag `v0.1.0`.
 
 ## Sahibi için (Türkçe kısa özet)
 
@@ -69,14 +69,15 @@ then Micromine, Deswik, Surpac, Vulcan. Never a toy, never "AI slop".
 - Owner has real/anonymized drillhole CSV/XLSX test data; a sample set is
   bundled in the app (Help menu) and in the project files `ornek-sondaj/`.
 
-### What is done (main, PR #1–#43)
+### What is done (main, PR #1–#43, #59)
 - M0 foundation, M1 core contracts (units, CRS incl. local grid, project
   package, operation log/undo), M2 drillholes (import, Turkish validation
   report, min-curvature desurvey, compositing, 3D view) — DONE.
 - M3–M11 IN PROGRESS with large parts working: DTM surfaces, solids
   (import/export, verify/repair, voxel booleans), strings and section
   linking, regular and rotated block models, re-blocking, calculator;
-  variograms, NN/IDW/OK kriging in Rust, swath, cross-validation;
+  variograms, NN/IDW/OK/SK kriging in Rust with multi-pass search,
+  slope of regression and kriging efficiency, swath, cross-validation;
   grade-tonnage reports (XLSX/PDF) with confidence categories;
   open-pit max-closure optimisation, nested shells, NPV-driven pushbacks,
   minimum mining width, Lane cut-off, process routes, co-products,
