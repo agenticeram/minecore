@@ -448,3 +448,28 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 - Tonnes use one density given by the user; density from a block model is
   not yet used. The thickness map is a CSV grid (`--grid-csv`); no colour
   map or contour plot yet.
+
+## Stockpile volume and month-end survey (catalogue OC08, OC09)
+
+- Stockpile outline: drawn by the user (closed string). The automatic
+  outline proposal from slope and height difference (OC08 step 1) is not
+  done; nor is the orthophoto view with outlines (needs OC13).
+- Plane and boundary bases take outline elevations from a 3D outline, else
+  from the pile surface; a string set whose z values are all zero is
+  treated as a 2D outline. The plane fit RMS is reported, no threshold is
+  applied (the user judges it).
+- Pile density is one value per survey with its measured date and source;
+  there is no shared material table yet (UF17 stockpile model link is open).
+  Stored surveys are project objects (`stockpile_survey`); the change is
+  against the latest earlier survey date of the same pile name.
+- Month-end block intersection samples `samples x samples` vertical lines
+  per block; exact for level cuts, converging for sloping surfaces. Only the
+  parent block grid is used (no sub-blocks). Material is from user grade
+  limits (one grade attribute) or a category attribute; multi-element rules
+  need a calculator attribute first.
+- Truck count comparison takes one load count and one t/load for the
+  period (UF15 truck records are not linked yet). Dump fill is reported as
+  the exact fill volume only, not split by dump.
+- No coloured map of mined blocks by material yet (OC09 step 6); the table
+  goes to CSV (`minecore survey month-end --csv`). Survey reports with an
+  audit trail (OC20) are next.
