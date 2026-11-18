@@ -422,3 +422,29 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
   import as solids; drillholes export as desurveyed traces only (no interval
   data). Cell order assumed i fastest (OMF convention); round trip tested
   in MineCore only, not yet against Leapfrog/Deswik files.
+
+## Survey surfaces and volumes (catalogue OC06, OC07)
+
+- Breaklines are honoured by a conforming Delaunay triangulation (segments
+  are split at midpoints until every piece is a triangle edge; the new
+  vertices are stored with the surface). It needs no new dependency, but a
+  very dense breakline set can add many vertices. Spot points within the
+  merge tolerance of a breakline are dropped (the breakline wins); breakline
+  crossings with different elevations are refused with their location.
+- Not yet: surface union (lowest or highest of two surfaces, "latest pit
+  surface" = min(topography, survey)), catalogue OC06 step 6. Clipping a
+  surface that already has a boundary is refused (rebuild it with the
+  combined boundary).
+- DXF reading: ASCII only (binary DXF refused); POINT, LINE, POLYLINE (2-D,
+  3-D, polyface), LWPOLYLINE and 3DFACE. Arcs, splines, polygon meshes and
+  block inserts are skipped and counted. The GUI asks only for the boundary
+  layer and the longest-edge limit; every other layer feeds points and
+  breaklines (the CLI chooses layers per role).
+- Section method: straight sections perpendicular to the axis segment at
+  each station; on a curved axis, sections near a bend can overlap or leave
+  wedges (no curvature correction). The mid-section area for the
+  prismoidal rule is measured on a real section at mid-interval. Sections
+  run in the CLI only (no GUI yet) and ignore `--limit`.
+- Tonnes use one density given by the user; density from a block model is
+  not yet used. The thickness map is a CSV grid (`--grid-csv`); no colour
+  map or contour plot yet.

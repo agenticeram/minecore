@@ -26,7 +26,8 @@ from minecore.blockmodel import BlockModel
 from minecore.gui.layout import fit_to_screen, scroll_panel
 from minecore.gui.resource import _row, _spin, block_models
 from minecore.project import Project
-from minecore.reserves import BenchRow, bench_reserves, between_fraction, volume_between
+from minecore.reserves import BenchRow, bench_reserves, between_fraction
+from minecore.survey.volumes import grid_volume, triangle_volume
 
 HEADERS = [
     "Basamak taban kotu",
@@ -88,10 +89,15 @@ class ReservesDialog(QDialog):
         self.vol_b.addItems(names)
         if len(names) > 1:
             self.vol_b.setCurrentIndex(1)
+        self.vol_method = QComboBox()
+        self.vol_method.addItems(["Üçgen kesiştirme (tam)", "Izgara (hücre merkezleri)"])
         self.cell = _spin(5.0, 0.5, 100.0, 0.5, 1)
+        self.cell.setEnabled(False)
+        self.vol_method.currentIndexChanged.connect(lambda i: self.cell.setEnabled(i == 1))
         form.addRow(QLabel("<b>İki yüzey arası hacim (kazı / dolgu)</b>"))
         form.addRow("Yüzey A / yüzey B", _row(self.vol_a, self.vol_b))
-        form.addRow("Raster hücresi (m)", self.cell)
+        form.addRow("Yöntem", self.vol_method)
+        form.addRow("Izgara hücresi (m)", self.cell)
         vol = QPushButton("Hacmi hesapla")
         vol.clicked.connect(self._guard(self.volume))
         form.addRow(vol)
@@ -195,12 +201,14 @@ class ReservesDialog(QDialog):
         a, b = self.vol_a.currentText(), self.vol_b.currentText()
         if not a or not b:
             raise RuntimeError("İki yüzey gerekli.")
-        v = volume_between(
-            surfaces.load_surface(self.project, a),
-            surfaces.load_surface(self.project, b),
-            self.cell.value(),
-        )
+        sa, sb = surfaces.load_surface(self.project, a), surfaces.load_surface(self.project, b)
+        if self.vol_method.currentIndex() == 0:
+            v = triangle_volume(sa, sb)
+            how = "üçgen kesiştirme"
+        else:
+            v = grid_volume(sa, sb, self.cell.value())
+            how = f"{self.cell.value():g} m ızgara"
         self.vol_label.setText(
-            f"Kazı ({a} üstte): {v.cut / 1e6:,.3f} Mm³; dolgu ({b} üstte): {v.fill / 1e6:,.3f} "
-            f"Mm³; net {v.net / 1e6:,.3f} Mm³; ortak alan {v.area / 1e4:,.2f} ha."
+            f"Kazı ({a} üstte): {v.cut:,.1f} m³; dolgu ({b} üstte): {v.fill:,.1f} m³; "
+            f"net {v.net:,.1f} m³; ortak alan {v.area / 1e4:,.4f} ha ({how})."
         )

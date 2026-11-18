@@ -155,7 +155,7 @@ def string_names(project: Project) -> list[str]:
 
 def _unique_ring(points: Floats) -> Floats:
     p = np.asarray(points, np.float64)
-    if len(p) > 1 and np.allclose(p[0], p[-1]):
+    if len(p) > 1 and np.allclose(p[0], p[-1], rtol=0.0, atol=1e-9):
         p = p[:-1]
     keep = np.r_[True, np.linalg.norm(np.diff(p, axis=0), axis=1) > 1e-9]
     p = p[keep]
@@ -271,7 +271,11 @@ def _signed_volume(solid: Solid) -> float:
 
 def section_order(strings: list[String]) -> list[String]:
     """Closed strings sorted along the axis on which their centroids spread most."""
-    closed = [s for s in strings if s.closed or np.allclose(s.points[0], s.points[-1])]
+    closed = [
+        s
+        for s in strings
+        if s.closed or np.allclose(s.points[0], s.points[-1], rtol=0.0, atol=1e-9)
+    ]
     if len(closed) < 2:
         raise StringError("at least two closed outlines are needed")
     centres = np.array([s.points.mean(axis=0) for s in closed])

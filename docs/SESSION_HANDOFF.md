@@ -1,18 +1,30 @@
 # Session handoff
 
-Updated: 2026-11-17 (architect, thread "Add next MineCore feature").
+Updated: 2026-11-18 (architect, thread "Add surface DXF import and volumes").
 Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 
 ## Owner direction (binding)
 - Windows 11 only. Wants a usable program fast, accepts some bugs, tests the GUI
   himself. Reply in Turkish, short, plain. He is not a GitHub user.
-- Claude may merge PRs itself when CI is green (owner, 2026-10-25).
+- Ask the owner before any commit or push (owner, 2026-11-18; replaces the
+  earlier standing merge permission).
 - Overnight 2026-10-25: work without asking until 09:55 TR (06:55 UTC), or 11:55
   TR if he does not answer; skip blockers and report them.
 - Target depth: Datamine (Studio RM + NPVS + OP) as one integrated program.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
+- 2026-11-18: owner's capability catalogue (on his PC, `textler/`: 00_DIZIN,
+  durum.csv, 9 area files, 257 capabilities; add 1-2 at a time, catalogue
+  validation numbers become tests, thresholds are user inputs, ask before
+  commit/push). OC06 + OC07 added: breakline/boundary/hole/longest-edge
+  surfaces and ASCII DXF reading (`surfaces.build_surface`,
+  `read_dxf_surface`, `clip_surface`, `io.dxf.read_dxf`); exact
+  triangle-overlay, grid and section volumes (`minecore.survey.volumes`;
+  CLI `surface import|clip|volume --method triangle|grid|sections`; GUI
+  volume method choice and DXF surface import). `reserves.volume_between`
+  removed (replaced). Triangulation now runs in local coordinates and is
+  cached. Next per catalogue: OC08, OC09 (then UF01-UF07).
 - 2026-11-17: PR #59 multi-pass estimation search (`<attr>_pass`), simple
   kriging, slope of regression (`_sor`) and kriging efficiency (`_ke`) for
   OK/SK, confidence criteria on max pass and min slope; GUI, CLI

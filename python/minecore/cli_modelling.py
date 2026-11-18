@@ -17,6 +17,7 @@ from CSV files to a pit schedule runs headless:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
@@ -93,9 +94,10 @@ from minecore.pitopt.sensitivity import (
 from minecore.pitopt.width import apply_mining_width
 from minecore.plots import SectionSpec, section_plot
 from minecore.project import Project
-from minecore.reserves import bench_reserves, between_fraction, volume_between
+from minecore.reserves import bench_reserves, between_fraction
 from minecore.solids import flag_blocks, load_solid, read_solid, save_solid
 from minecore.solidtools import Boolean, boolean, cut_by_surface, repair, verify
+from minecore.survey import volumes
 from minecore.underground.development import DeclineDesign, development_from_model
 from minecore.underground.devschedule import DevRates, schedule_development
 from minecore.underground.stopes import stopes_from_model
@@ -126,18 +128,47 @@ def add_parsers(commands: Any) -> None:  # noqa: PLR0915 - argument tables
 
     sf = commands.add_parser("surface", help="topography surfaces")
     sf_cmds = sf.add_subparsers(dest="sf_command", metavar="ACTION", required=True)
-    s_imp = sf_cmds.add_parser("import", help="x, y, z points file")
+    s_imp = sf_cmds.add_parser(
+        "import", help="surface from an x, y, z points file or an ASCII DXF, with breaklines"
+    )
     s_imp.add_argument("project")
     s_imp.add_argument("name")
-    s_imp.add_argument("file")
+    s_imp.add_argument("file", help=".csv/.txt/.xyz points or .dxf")
+    s_imp.add_argument("--points-layer", action="append", help="DXF layer of spot heights")
+    s_imp.add_argument("--breakline-layer", action="append", help="DXF layer of breaklines")
+    s_imp.add_argument("--boundary-layer", help="DXF layer of closed boundary rings")
+    s_imp.add_argument("--breaklines", action="append", default=[], help="string set as breaklines")
+    s_imp.add_argument("--boundary", help="string set of closed boundary rings (holes inside)")
+    s_imp.add_argument("--max-edge", type=float, help="remove triangles with a longer edge, m")
+    s_imp.add_argument("--tolerance", type=float, default=0.001, help="vertex merge distance, m")
+    s_imp.add_argument("--z-tolerance", type=float, default=0.001, help="crossing z check, m")
+    s_clip = sf_cmds.add_parser("clip", help="part of a surface inside closed strings")
+    s_clip.add_argument("project")
+    s_clip.add_argument("surface")
+    s_clip.add_argument("boundary", help="string set of closed rings")
+    s_clip.add_argument("--save", required=True, help="name of the clipped surface")
     s_col = sf_cmds.add_parser("from-collars", help="surface through the collars")
     s_col.add_argument("project")
     s_col.add_argument("name")
     s_vol = sf_cmds.add_parser("volume", help="cut and fill volume between two surfaces")
     s_vol.add_argument("project")
     s_vol.add_argument("upper", help="surface a (cut where a is above b)")
-    s_vol.add_argument("lower", help="surface b")
-    s_vol.add_argument("--cell", type=float, default=5.0, help="raster cell, m")
+    s_vol.add_argument("lower", nargs="?", help="surface b (or give --level)")
+    s_vol.add_argument("--level", type=float, help="constant elevation instead of surface b")
+    s_vol.add_argument(
+        "--method",
+        choices=("triangle", "grid", "sections"),
+        default="triangle",
+        help="triangle: exact overlay; grid: cell centres; sections: along --axis",
+    )
+    s_vol.add_argument("--cell", type=float, help="grid cell, m (grid method, --grid-csv)")
+    s_vol.add_argument("--axis", help="string set whose first string is the section axis")
+    s_vol.add_argument("--interval", type=float, help="section spacing along the axis, m")
+    s_vol.add_argument("--half-width", type=float, help="section reach each side of the axis, m")
+    s_vol.add_argument("--limit", help="string set of closed rings limiting the area")
+    s_vol.add_argument("--density", type=float, help="t/m3 to report tonnes")
+    s_vol.add_argument("--sections-csv", help="write section areas and volumes")
+    s_vol.add_argument("--grid-csv", help="write the thickness grid (needs --cell)")
     s_flag = sf_cmds.add_parser("flag", help="write kaya=1 below the surface into a block model")
     s_flag.add_argument("project")
     s_flag.add_argument("surface")
@@ -961,22 +992,149 @@ def drillholes_command(args: argparse.Namespace, out: TextIO) -> int:
         return 0
 
 
+def _surface_import(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    lines = [st.points for name in args.breaklines for st in strings.load_strings(project, name)]
+    rings = (
+        [st.points for st in strings.load_strings(project, args.boundary) if st.closed]
+        if args.boundary
+        else []
+    )
+    path = Path(args.file)
+    limits = {"tolerance": args.tolerance, "z_tolerance": args.z_tolerance}
+    if path.suffix.lower() == ".dxf":
+        layers = surfaces.DxfSurfaceLayers(
+            args.points_layer, args.breakline_layer, args.boundary_layer
+        )
+        if lines or rings:
+            raise SystemExit("with a DXF, give breaklines and boundary as DXF layers")
+        s, report = surfaces.read_dxf_surface(path, layers, max_edge=args.max_edge, **limits)
+    else:
+        points = surfaces.read_points_csv(path).points
+        s, report = surfaces.build_surface(points, lines, rings, max_edge=args.max_edge, **limits)
+    surfaces.save_surface(project, args.name, s)
+    out.write(
+        f"surface {args.name}: {len(s.points)} points, {report.triangles} triangles; "
+        f"{report.breakline_vertices} breakline vertices, {report.inserted} inserted, "
+        f"{report.crossings_split} crossings split, {report.duplicates_merged} duplicates "
+        f"merged ({report.elevation_conflicts} with different z), "
+        f"{report.points_on_breaklines} spot points on breaklines dropped\n"
+    )
+
+
+def _surface_volume(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    upper = surfaces.load_surface(project, args.upper)
+    if (args.lower is None) == (args.level is None):
+        raise SystemExit("give either a lower surface or --level")
+    lower: surfaces.Surface | float = (
+        surfaces.load_surface(project, args.lower) if args.lower else float(args.level)
+    )
+    limit = (
+        [st.points[:, :2] for st in strings.load_strings(project, args.limit) if st.closed]
+        if args.limit
+        else []
+    )
+    if args.method == "triangle":
+        reports = [volumes.triangle_volume(upper, lower, limit=limit)]
+    elif args.method == "grid":
+        if args.cell is None:
+            raise SystemExit("the grid method needs --cell")
+        reports = [volumes.grid_volume(upper, lower, args.cell, limit=limit)]
+    else:
+        reports = _section_reports(project, upper, lower, limit, args)
+    for v in reports:
+        line = (
+            f"{v.method}: cut {v.cut:,.1f} m3, fill {v.fill:,.1f} m3, net {v.net:,.1f} m3, "
+            f"gross {v.gross:,.1f} m3"
+        )
+        if math.isfinite(v.area):
+            line += f" over {v.area:,.1f} m2"
+        if args.density is not None:
+            ct, ft = v.tonnes(args.density)
+            line += f"; {ct:,.0f} t cut, {ft:,.0f} t fill at {args.density:g} t/m3"
+        out.write(line + "\n")
+    if args.grid_csv:
+        if args.cell is None:
+            raise SystemExit("--grid-csv needs --cell")
+        grid = volumes.thickness_grid(upper, lower, args.cell, limit=limit)
+        _write_grid_csv(Path(args.grid_csv), grid)
+
+
+def _section_reports(
+    project: Project,
+    upper: surfaces.Surface,
+    lower: surfaces.Surface | float,
+    limit: list[npt.NDArray[np.float64]],
+    args: argparse.Namespace,
+) -> list[volumes.VolumeReport]:
+    if args.axis is None or args.interval is None or args.half_width is None:
+        raise SystemExit("the sections method needs --axis, --interval and --half-width")
+    if limit:
+        raise SystemExit("--limit is not used by the sections method")
+    axis = strings.load_strings(project, args.axis)[0].points
+    sec = volumes.section_volumes(upper, lower, axis, args.interval, args.half_width)
+    if args.sections_csv:
+        _write_sections_csv(Path(args.sections_csv), sec)
+    return [sec.total("end_area"), sec.total("prismoidal")]
+
+
+def _write_grid_csv(path: Path, g: volumes.ThicknessGrid) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["x", "y", "thickness_m"])
+        for i, x in enumerate(g.x):
+            for j, y in enumerate(g.y):
+                if math.isfinite(g.dz[i, j]):
+                    w.writerow([f"{x:.3f}", f"{y:.3f}", f"{g.dz[i, j]:.3f}"])
+
+
+def _write_sections_csv(path: Path, sec: volumes.SectionReport) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["station_m", "cut_area_m2", "fill_area_m2"])
+        for r in sec.sections:
+            w.writerow([f"{r.station:.3f}", f"{r.cut_area:.3f}", f"{r.fill_area:.3f}"])
+        w.writerow([])
+        w.writerow(
+            [
+                "from_m",
+                "to_m",
+                "mid_cut_area_m2",
+                "mid_fill_area_m2",
+                "cut_end_area_m3",
+                "fill_end_area_m3",
+                "cut_prismoidal_m3",
+                "fill_prismoidal_m3",
+            ]
+        )
+        for i in sec.intervals:
+            w.writerow(
+                [
+                    f"{v:.3f}"
+                    for v in (
+                        i.start,
+                        i.end,
+                        i.mid_cut_area,
+                        i.mid_fill_area,
+                        i.cut_end_area,
+                        i.fill_end_area,
+                        i.cut_prismoidal,
+                        i.fill_prismoidal,
+                    )
+                ]
+            )
+
+
 def surface_command(args: argparse.Namespace, out: TextIO) -> int:
     with Project.open(args.project) as project:
         if args.sf_command == "import":
-            s = surfaces.read_points_csv(Path(args.file))
-            surfaces.save_surface(project, args.name, s)
-            out.write(f"surface {args.name}: {len(s.points)} points\n")
+            _surface_import(project, args, out)
+        elif args.sf_command == "clip":
+            rings = [st.points for st in strings.load_strings(project, args.boundary) if st.closed]
+            clipped = surfaces.clip_surface(surfaces.load_surface(project, args.surface), rings)
+            surfaces.save_surface(project, args.save, clipped)
+            out.write(f"surface {args.save}: {len(clipped.triangles())} triangles\n")
         elif args.sf_command == "volume":
-            v = volume_between(
-                surfaces.load_surface(project, args.upper),
-                surfaces.load_surface(project, args.lower),
-                args.cell,
-            )
-            out.write(
-                f"cut {v.cut:,.0f} m3, fill {v.fill:,.0f} m3, net {v.net:,.0f} m3 "
-                f"over {v.area:,.0f} m2 ({v.cells} cells of {args.cell:g} m)\n"
-            )
+            _surface_volume(project, args, out)
         elif args.sf_command == "from-collars":
             db = _db(project)
             geo = hole_geometry(db, validate(db))
