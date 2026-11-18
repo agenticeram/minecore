@@ -11,10 +11,8 @@ attribute (rock type, confidence category, pushback). Blocks without a grade
 estimate count as waste and are counted. This is a design inventory, not a
 classified resource or reserve statement (rule 8).
 
-``volume_between``: cut (``a`` above ``b``) and fill (``b`` above ``a``)
-volumes on a regular raster of ``cell`` metres where both surfaces exist
-(inside both triangulation hulls), e.g. topography against a mined-out
-survey, or a design against the current pit.
+Volumes between surfaces (exact triangle overlay, grid and sections) live
+in ``minecore.survey.volumes``.
 """
 
 from __future__ import annotations
@@ -24,7 +22,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
-from scipy.spatial import Delaunay
 
 from minecore._core import MineCoreError
 from minecore.blockmodel import BlockModel
@@ -132,46 +129,3 @@ def _label(v: float) -> str:
     if not math.isfinite(v):
         return "-"
     return str(int(v)) if float(v).is_integer() else f"{v:g}"
-
-
-@dataclass(frozen=True)
-class VolumeResult:
-    cut: float  # m3 where a is above b
-    fill: float  # m3 where b is above a
-    area: float  # m2 where both surfaces exist
-    cells: int
-
-    @property
-    def net(self) -> float:
-        return self.cut - self.fill
-
-
-def volume_between(a: Surface, b: Surface, cell: float = 5.0) -> VolumeResult:
-    """Cut and fill volumes between two surfaces on a raster of ``cell`` metres."""
-    if not (math.isfinite(cell) and cell > 0):
-        raise ReservesError("cell size must be > 0")
-    lo = np.maximum(a.points[:, :2].min(axis=0), b.points[:, :2].min(axis=0))
-    hi = np.minimum(a.points[:, :2].max(axis=0), b.points[:, :2].max(axis=0))
-    if np.any(hi <= lo):
-        raise ReservesError("the surfaces do not overlap in plan")
-    n = np.ceil((hi - lo) / cell).astype(np.int64)
-    if int(n[0]) * int(n[1]) > 25_000_000:
-        raise ReservesError("too many raster cells; use a larger cell size")
-    xs = lo[0] + (np.arange(n[0]) + 0.5) * cell
-    ys = lo[1] + (np.arange(n[1]) + 0.5) * cell
-    gx, gy = np.meshgrid(xs, ys, indexing="ij")
-    xy = np.column_stack([gx.ravel(), gy.ravel()])
-    both = (Delaunay(a.points[:, :2]).find_simplex(xy) >= 0) & (
-        Delaunay(b.points[:, :2]).find_simplex(xy) >= 0
-    )
-    xy = xy[both]
-    if len(xy) == 0:
-        raise ReservesError("the surfaces do not overlap in plan")
-    dz = a.elevation(xy)[0] - b.elevation(xy)[0]
-    area = cell * cell
-    return VolumeResult(
-        float(np.clip(dz, 0, None).sum() * area),
-        float(np.clip(-dz, 0, None).sum() * area),
-        float(len(xy) * area),
-        len(xy),
-    )

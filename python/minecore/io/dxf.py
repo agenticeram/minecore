@@ -65,3 +65,158 @@ def write_dxf(
     out += ["0", "ENDSEC", "0", "EOF"]
     path.write_text("\n".join(out) + "\n", encoding="ascii", errors="replace")
     return count
+
+
+# -- reading -----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DxfEntities:
+    """Geometry read from the ``ENTITIES`` section of an ASCII DXF.
+
+    ``points``: (layer, x, y, z) of ``POINT`` entities; ``polylines``: ``LINE``,
+    ``POLYLINE`` (2-D and 3-D) and ``LWPOLYLINE`` (elevation from group 38);
+    ``faces``: ``3DFACE`` and polyface-mesh triangles as (layer, 3 x 3) corners.
+    Polygon meshes, splines, arcs and block inserts are counted in ``skipped``.
+    """
+
+    points: list[tuple[str, Floats]]
+    polylines: list[Polyline]
+    faces: list[tuple[str, Floats]]
+    skipped: dict[str, int]
+
+    def layers(self) -> list[str]:
+        names = {p[0] for p in self.points} | {p.layer for p in self.polylines}
+        return sorted(names | {f[0] for f in self.faces})
+
+
+class DxfError(ValueError):
+    """Unreadable DXF content."""
+
+
+def _pairs(path: Path) -> list[tuple[str, str]]:
+    raw = path.read_bytes()
+    if raw.startswith(b"AutoCAD Binary DXF"):
+        raise DxfError(f"{path.name}: binary DXF is not supported; save as ASCII DXF")
+    text = raw.decode("utf-8", errors="replace")
+    lines = [s.strip() for s in text.splitlines()]
+    if len(lines) % 2:
+        lines = lines[:-1]
+    return list(zip(lines[0::2], lines[1::2], strict=True))
+
+
+def _entities_section(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Group pairs of the ENTITIES section (the whole file if it has no sections)."""
+    start = None
+    for k in range(len(pairs) - 1):
+        if pairs[k] == ("0", "SECTION") and pairs[k + 1] == ("2", "ENTITIES"):
+            start = k + 2
+            break
+    if start is None:
+        if any(p == ("0", "SECTION") for p in pairs):
+            raise DxfError("DXF has no ENTITIES section")
+        return pairs
+    end = next((k for k in range(start, len(pairs)) if pairs[k] == ("0", "ENDSEC")), len(pairs))
+    return pairs[start:end]
+
+
+def _xyz(groups: list[tuple[str, str]], base: int) -> Floats:
+    p = [0.0, 0.0, 0.0]
+    for c, v in groups:
+        for axis in range(3):
+            if c == str(base + 10 * axis):
+                p[axis] = float(v)
+    return np.array(p)
+
+
+def read_dxf(path: Path) -> DxfEntities:  # noqa: PLR0912, PLR0915 - one DXF pass
+    """Read points, polylines and faces from an ASCII DXF (any release)."""
+    try:
+        pairs = _entities_section(_pairs(path))
+    except UnicodeError as exc:  # pragma: no cover - decode uses errors="replace"
+        raise DxfError(f"{path.name}: {exc}") from exc
+    # Split into entities: each starts at a group-0 pair.
+    starts = [k for k, (c, _) in enumerate(pairs) if c == "0"]
+    entities = [
+        (pairs[s][1], pairs[s + 1 : (starts[n + 1] if n + 1 < len(starts) else len(pairs))])
+        for n, s in enumerate(starts)
+    ]
+    points: list[tuple[str, Floats]] = []
+    polylines: list[Polyline] = []
+    faces: list[tuple[str, Floats]] = []
+    skipped: dict[str, int] = {}
+
+    def layer_of(groups: list[tuple[str, str]]) -> str:
+        return next((v for c, v in groups if c == "8"), "0")
+
+    def flag_of(groups: list[tuple[str, str]]) -> int:
+        return int(next((v for c, v in groups if c == "70"), "0") or 0)
+
+    i = 0
+    try:
+        while i < len(entities):
+            kind, groups = entities[i]
+            i += 1
+            if kind == "POINT":
+                points.append((layer_of(groups), _xyz(groups, 10)))
+            elif kind == "LINE":
+                a, b = _xyz(groups, 10), _xyz(groups, 11)
+                polylines.append(Polyline(layer_of(groups), np.vstack([a, b]), False))
+            elif kind == "3DFACE":
+                q = [_xyz(groups, 10 + k) for k in range(4)]
+                tris = [np.vstack(q[:3])]
+                if np.linalg.norm(q[3] - q[2]) > 1e-12:
+                    tris.append(np.vstack([q[0], q[2], q[3]]))
+                faces += [(layer_of(groups), t) for t in tris]
+            elif kind == "LWPOLYLINE":
+                pts: list[list[float]] = []
+                elev = 0.0
+                for c, v in groups:
+                    if c == "38":
+                        elev = float(v)
+                    elif c == "10":
+                        pts.append([float(v), 0.0])
+                    elif c == "20" and pts:
+                        pts[-1][1] = float(v)
+                if len(pts) >= 2:
+                    arr = np.column_stack([np.array(pts), np.full(len(pts), elev)])
+                    polylines.append(Polyline(layer_of(groups), arr, bool(flag_of(groups) & 1)))
+            elif kind == "POLYLINE":
+                flag, layer = flag_of(groups), layer_of(groups)
+                elev = float(next((v for c, v in groups if c == "30"), "0") or 0.0)
+                vertices: list[Floats] = []
+                face_refs: list[list[int]] = []
+                while i < len(entities) and entities[i][0] == "VERTEX":
+                    vg = entities[i][1]
+                    vflag = flag_of(vg)
+                    if flag & 64 and vflag & 128 and not vflag & 64:
+                        refs = [int(v) for c, v in vg if c in ("71", "72", "73", "74")]
+                        face_refs.append([abs(r) for r in refs if r != 0])
+                    else:
+                        vertices.append(_xyz(vg, 10))
+                    i += 1
+                if i < len(entities) and entities[i][0] == "SEQEND":
+                    i += 1
+                if flag & 16:
+                    skipped["POLYLINE (polygon mesh)"] = (
+                        skipped.get("POLYLINE (polygon mesh)", 0) + 1
+                    )
+                elif flag & 64:
+                    for refs in face_refs:
+                        corners = [vertices[r - 1] for r in refs if 0 < r <= len(vertices)]
+                        for k in range(1, len(corners) - 1):
+                            faces.append(
+                                (layer, np.vstack([corners[0], corners[k], corners[k + 1]]))
+                            )
+                elif len(vertices) >= 2:
+                    arr = np.vstack(vertices)
+                    if not flag & 8:  # 2-D polyline: z from the entity elevation
+                        arr[:, 2] = elev
+                    polylines.append(Polyline(layer, arr, bool(flag & 1)))
+            elif kind in ("VERTEX", "SEQEND"):
+                continue
+            else:
+                skipped[kind] = skipped.get(kind, 0) + 1
+    except (ValueError, IndexError) as exc:
+        raise DxfError(f"{path.name}: malformed entity ({exc})") from exc
+    return DxfEntities(points, polylines, faces, skipped)

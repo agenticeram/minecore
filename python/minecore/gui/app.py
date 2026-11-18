@@ -75,7 +75,7 @@ from minecore.gui.resource import (
     block_models,
     export_block_model_csv,
 )
-from minecore.io.dxf import write_dxf
+from minecore.io.dxf import read_dxf, write_dxf
 from minecore.pitopt.design import export_pit
 from minecore.project import Project
 
@@ -677,16 +677,65 @@ class MainWindow(QMainWindow):
     def import_surface(self) -> None:
         project = self._need_project()
         path, _ = QFileDialog.getOpenFileName(
-            self, "Topoğrafya noktaları", "", "Metin tabloları (*.csv *.txt *.xyz)"
+            self,
+            "Topoğrafya noktaları veya DXF",
+            "",
+            "Yüzey dosyaları (*.csv *.txt *.xyz *.dxf);;DXF (*.dxf);;"
+            "Metin tabloları (*.csv *.txt *.xyz)",
         )
         if not path:
             return
-        surface = surfaces.read_points_csv(Path(path))
+        if Path(path).suffix.lower() == ".dxf":
+            loaded = self._dxf_surface(Path(path))
+            if loaded is None:
+                return
+            surface, note = loaded
+        else:
+            surface, note = surfaces.read_points_csv(Path(path)), ""
         name, ok = QInputDialog.getText(self, "Yüzey adı", "Ad:", text=Path(path).stem)
         if ok and name.strip():
             surfaces.save_surface(project, name.strip(), surface)
             self.refresh()
-            self.statusBar().showMessage(f"{len(surface.points):,} noktalı yüzey kaydedildi.")
+            self.statusBar().showMessage(
+                f"{len(surface.points):,} noktalı yüzey kaydedildi. {note}".strip()
+            )
+
+    def _dxf_surface(self, path: Path) -> tuple[surfaces.Surface, str] | None:
+        """Ask for the boundary layer and the longest edge, then build the surface."""
+        layers = read_dxf(path).layers()
+        none = "(sınır yok)"
+        boundary, ok = QInputDialog.getItem(
+            self,
+            "DXF sınır katmanı",
+            "Kapalı sınır çizgileri (içteki halkalar ada):",
+            [none, *layers],
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        edge, ok = QInputDialog.getDouble(
+            self,
+            "Uzun kenar temizliği",
+            "Bu uzunluktan uzun kenarlı üçgenleri sil (m, 0 = silme):",
+            0.0,
+            0.0,
+            1e6,
+            2,
+        )
+        if not ok:
+            return None
+        surface, report = surfaces.read_dxf_surface(
+            path,
+            surfaces.DxfSurfaceLayers(boundary=None if boundary == none else boundary),
+            max_edge=edge if edge > 0 else None,
+        )
+        note = (
+            f"{report.triangles:,} üçgen; {report.breakline_vertices:,} kırık çizgi köşesi, "
+            f"{report.inserted:,} ara nokta eklendi, {report.crossings_split} kesişim bölündü, "
+            f"{report.elevation_conflicts} çakışan noktada kot farkı."
+        )
+        return surface, note
 
     def surface_from_collars(self) -> None:
         project = self._need_project()
