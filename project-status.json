@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-17",
+  "updated": "2026-11-18",
   "current_milestone": "M7",
   "milestones": [
     {
@@ -55,7 +55,7 @@
       "id": "M8",
       "title": "Open-pit design and scheduling",
       "status": "IN_PROGRESS",
-      "evidence": "Constrained schedule, bench inventory, bench design with spiral and switchback ramps (PR #28), pit/design DXF, end-of-period surfaces, section/plan PDF plots, geotechnical sectors (PR #11-#20); stockpile grade bins, capacity, rehandling (PR #31); NPV-maximising MILP schedule with HiGHS (PR #33). One ramp per separate pit (PR #35); truck/loader fleet, drill and blast, waste dumps (PR #36). PR #38: bench reserves between surfaces, cut/fill, string editor, toe-string pit design, connector ramps and bunds, grade control dig lines, dump sequencing."
+      "evidence": "Constrained schedule, bench inventory, bench design with spiral and switchback ramps (PR #28), pit/design DXF, end-of-period surfaces, section/plan PDF plots, geotechnical sectors (PR #11-#20); stockpile grade bins, capacity, rehandling (PR #31); NPV-maximising MILP schedule with HiGHS (PR #33). One ramp per separate pit (PR #35); truck/loader fleet, drill and blast, waste dumps (PR #36). PR #38: bench reserves between surfaces, cut/fill, string editor, toe-string pit design, connector ramps and bunds, grade control dig lines, dump sequencing. Mine survey (catalogue OC06-OC09, 2026-11-18): breakline/DXF surfaces, exact cut/fill, grid and section volumes, stockpile volumes with four bases, month-end excavation by material against the block model."
     },
     {
       "id": "M9",

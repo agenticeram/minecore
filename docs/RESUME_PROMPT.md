@@ -1,7 +1,9 @@
 # MineCore — resume file (devam dosyası)
 
-Updated: 2026-11-17. Repository state at this date: `main` includes
-PR #59 (multi-pass search, simple kriging, slope of regression), CI green on Windows and Linux, tag `v0.1.0`.
+Updated: 2026-11-18. Repository state at this date: `main` includes
+PR #60 (survey surfaces and volumes, catalogue OC06/OC07), CI green on Windows and Linux, tag `v0.1.0`.
+Branch work after it: stockpile volume and month-end survey (OC08/OC09); see
+`docs/SESSION_HANDOFF.md`.
 
 ## Sahibi için (Türkçe kısa özet)
 

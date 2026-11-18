@@ -376,6 +376,7 @@ class MainWindow(QMainWindow):
         action(pit, "Taban çizgisinden pit tasarımı (elle, rampalı)...", self.toe_design)
         action(pit, "Tenör kontrolü (patlatma deliklerinden kazı hatları)...", self.grade_control)
         action(pit, "Tasarım rezervi (basamak basamak) ve yüzeyler arası hacim...", self.reserves)
+        action(pit, "Ölçme: stok hacmi ve ay sonu ilerleme...", self.survey)
         ug = self.menuBar().addMenu("Yer&altı")
         action(ug, "Pano zarfı (floating stope) ve pano seçimi...", self.stopes)
         action(ug, "Dekline ve kat galerileri...", self.decline)
@@ -1202,6 +1203,11 @@ class MainWindow(QMainWindow):
         from minecore.gui.reserves import ReservesDialog  # noqa: PLC0415
 
         ReservesDialog(self._need_project(), self).exec()
+
+    def survey(self) -> None:
+        from minecore.gui.survey import SurveyDialog  # noqa: PLC0415
+
+        SurveyDialog(self._need_project(), self).exec()
 
     def blast(self) -> None:
         from minecore.gui.blast import BlastDialog  # noqa: PLC0415

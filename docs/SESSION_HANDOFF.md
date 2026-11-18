@@ -1,6 +1,6 @@
 # Session handoff
 
-Updated: 2026-11-18 (architect, thread "Add surface DXF import and volumes").
+Updated: 2026-11-18 (architect, thread "Add stockpile and month-end volumes").
 Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 
 ## Owner direction (binding)
@@ -14,6 +14,17 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
+- 2026-11-18 (later): OC08 + OC09 added. `minecore.survey.stockpiles`: pile
+  volume inside a toe outline above a base (previous surface, outline TIN,
+  least squares plane with RMS, level), triangle or grid method, density
+  with measured date/source, stored surveys (`stockpile_survey` objects)
+  and change since the previous survey. `minecore.survey.month_end`: exact
+  excavated/filled volume, block share by sampled vertical lines, table by
+  phase/bench/material (user grade limits or category attribute), truck
+  load factor check. CLI `survey stockpile|stockpile-list|month-end`; GUI
+  Açık Ocak > "Ölçme: stok hacmi ve ay sonu ilerleme". Catalogue tests:
+  cone 523.6 m3, flat one-block cut = block tonnes. Next per catalogue:
+  OC10, OC20.
 - 2026-11-18: owner's capability catalogue (on his PC, `textler/`: 00_DIZIN,
   durum.csv, 9 area files, 257 capabilities; add 1-2 at a time, catalogue
   validation numbers become tests, thresholds are user inputs, ask before
