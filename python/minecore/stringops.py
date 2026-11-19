@@ -17,6 +17,9 @@ Operations
 * ``intersections``: plan crossings of two strings with z on each string.
 * ``trim_extend``: cut an end back to, or extend it forward to, a boundary
   string.
+* ``boolean``: plan union, intersection, difference and xor of sets of closed
+  strings (even-odd rule; results have holes clockwise).
+* ``fillet`` / ``chamfer``: round or cut every corner.
 * ``offset``: parallel string at a plan distance with mitre or round joins and
   an optional vertical shift (constant ``dz`` or a slope angle), as used to
   move a toe to a crest or a berm. Self-intersection loops created by
@@ -34,6 +37,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -779,3 +783,219 @@ def offset(  # noqa: PLR0913 - keyword-only options
         raise StringError("the offset leaves nothing of the string")
     lines.sort(key=lambda ln: -float(np.linalg.norm(np.diff(ln[:, :2], axis=0), axis=1).sum()))
     return [_new(ln + shift, False, s.layer) for ln in lines]
+
+
+# -- polygon booleans ----------------------------------------------------------
+
+BoolOp = Literal["union", "intersection", "difference", "xor"]
+Mask = npt.NDArray[np.bool_]
+_BOOL_RULES: dict[str, Callable[[Mask, Mask], Mask]] = {
+    "union": np.logical_or,
+    "intersection": np.logical_and,
+    "difference": lambda a, b: np.logical_and(a, np.logical_not(b)),
+    "xor": np.logical_xor,
+}
+
+
+def _drop_collinear(r: Floats, tol: float) -> Floats:
+    """Remove vertices lying on the straight 3-D line between their neighbours."""
+    while len(r) > 3:
+        prev, nxt = np.roll(r, 1, axis=0), np.roll(r, -1, axis=0)
+        u, v = r - prev, nxt - prev
+        lv = np.linalg.norm(v, axis=1)
+        dist = np.linalg.norm(np.cross(u, v), axis=1) / np.maximum(lv, 1e-300)
+        between = (u * v).sum(axis=1) > 0
+        drop = np.nonzero((dist <= tol) & between & (lv > 0))[0]
+        if not len(drop):
+            break
+        r = np.delete(r, drop[0], axis=0)
+    return r
+
+
+def _cut_at_contacts(seg0: Floats, seg1: Floats, tol: float) -> tuple[Floats, Floats]:
+    """Split segments at every crossing and at every vertex lying on them, so
+    that boundaries meet only at piece ends."""
+    m = len(seg0)
+    cuts: list[list[float]] = [[] for _ in range(m)]
+    for i, j, t, _u in _seg_hits(seg0, seg1, seg0, seg1):
+        if i == j:
+            continue
+        li = float(np.linalg.norm(seg1[i, :2] - seg0[i, :2]))
+        if t * li > tol and (1 - t) * li > tol:
+            cuts[i].append(t)
+    # vertices lying on other segments (touching and overlapping boundaries)
+    ci, cj = _candidate_pairs(seg0, seg0, seg0, seg1)
+    ab = (seg1 - seg0)[cj, :2]
+    length = np.sqrt((ab * ab).sum(axis=1))
+    tt = ((seg0[ci, :2] - seg0[cj, :2]) * ab).sum(axis=1) / np.maximum(length**2, 1e-300)
+    foot = seg0[cj, :2] + tt[:, None] * ab
+    near = np.hypot(*(seg0[ci, :2] - foot).T) <= tol
+    inner = (tt * length > tol) & ((1 - tt) * length > tol)
+    for k in np.nonzero(near & inner)[0]:
+        cuts[cj[k]].append(float(tt[k]))
+    p0s: list[Floats] = []
+    p1s: list[Floats] = []
+    for k in range(m):
+        ts = np.unique(np.r_[0.0, np.clip(cuts[k], 0, 1), 1.0])
+        pts = seg0[k] + ts[:, None] * (seg1[k] - seg0[k])
+        for s0, s1 in itertools.pairwise(pts):
+            if np.linalg.norm(s1[:2] - s0[:2]) > tol:
+                p0s.append(s0)
+                p1s.append(s1)
+    return np.array(p0s), np.array(p1s)
+
+
+def _side_offset(mid: Floats, seg0: Floats, seg1: Floats, scale: float, tol: float) -> Floats:
+    """Distance to sample each side of a piece: closer than any other boundary
+    that does not run through the piece's midpoint."""
+    cap = 1e-7 * scale
+    box = np.column_stack([mid, np.zeros(len(mid))])
+    reach = np.array([cap * 4, 0.0, 0.0])
+    ci, cj = _candidate_pairs(box - reach, box + reach, seg0, seg1)
+    ab = (seg1 - seg0)[cj, :2]
+    rel = mid[ci] - seg0[cj, :2]
+    tt = np.clip((rel * ab).sum(axis=1) / np.maximum((ab * ab).sum(axis=1), 1e-300), 0.0, 1.0)
+    dist = np.linalg.norm(rel - tt[:, None] * ab, axis=1)
+    gap = np.full(len(mid), np.inf)
+    far = dist > tol
+    np.minimum.at(gap, ci[far], dist[far])
+    return np.asarray(np.maximum(np.minimum(cap, 0.25 * gap), 1e-13 * scale), np.float64)
+
+
+def is_outer(s: String) -> bool:
+    """True for a counter-clockwise closed string (an outer boundary in
+    :func:`boolean` results); False for a clockwise one (a hole)."""
+    return _signed_area(_need(s, 3)[:, :2]) > 0
+
+
+def boolean(a: list[String], b: list[String], op: BoolOp) -> list[String]:
+    """Plan boolean of two sets of closed strings.
+
+    Each set is a region under the even-odd rule: a string nested inside
+    another of the same set is a hole. The result is a list of closed strings,
+    outer boundaries counter-clockwise and holes clockwise, largest first.
+    Points on the result carry z interpolated from the source string they come
+    from; where boundaries coincide, z is taken from one of them."""
+    if op not in _BOOL_RULES:
+        raise StringError("op must be union, intersection, difference or xor")
+    rings: list[Floats] = []
+    owner: list[int] = []
+    for side, group in enumerate((a, b)):
+        for s in group:
+            if not s.closed:
+                raise StringError("boolean operations need closed strings")
+            p = _need(s, 3)
+            if abs(_signed_area(p[:, :2] - p[0, :2])) <= _EPS:
+                raise StringError("a closed string has no plan area")
+            rings.append(p)
+            owner.append(side)
+    if not any(o == 0 for o in owner):
+        raise StringError("the first set has no closed strings")
+    layer = a[0].layer
+    origin = np.array([*np.vstack(rings)[:, :2].mean(axis=0), 0.0])
+    rings = [r - origin for r in rings]
+    scale = max(float(np.abs(np.vstack(rings)[:, :2]).max()), 1.0)
+    tol = 1e-9 * scale
+
+    seg0 = np.vstack([_segments(r, True)[0] for r in rings])
+    seg1 = np.vstack([_segments(r, True)[1] for r in rings])
+    q0, q1 = _cut_at_contacts(seg0, seg1, tol)
+    mid = (q0[:, :2] + q1[:, :2]) / 2
+    tan = q1[:, :2] - q0[:, :2]
+    tan /= np.linalg.norm(tan, axis=1)[:, None]
+    nrm = np.column_stack([-tan[:, 1], tan[:, 0]])
+    eps = _side_offset(mid, seg0, seg1, scale, tol)[:, None]
+
+    def inside(q: Floats, side: int) -> npt.NDArray[np.bool_]:
+        w = np.zeros(len(q), np.int64)
+        for r, o in zip(rings, owner, strict=True):
+            if o == side:
+                w += _winding(q, r)
+        return np.asarray(w % 2 == 1)
+
+    rule = _BOOL_RULES[op]
+    left_q, right_q = mid + eps * nrm, mid - eps * nrm
+    in_left = rule(inside(left_q, 0), inside(left_q, 1))
+    in_right = rule(inside(right_q, 0), inside(right_q, 1))
+    pieces: dict[tuple[tuple[float, float], tuple[float, float]], Floats] = {}
+    for k in np.nonzero(in_left != in_right)[0]:
+        e = np.array([q0[k], q1[k]]) if in_left[k] else np.array([q1[k], q0[k]])
+        key = (
+            (round(float(e[0, 0]) / tol), round(float(e[0, 1]) / tol)),
+            (round(float(e[1, 0]) / tol), round(float(e[1, 1]) / tol)),
+        )
+        pieces.setdefault(key, e)  # coincident boundaries give the same piece twice
+    chains = _chain(list(pieces.values()), 1e3 * tol)
+    out = [_drop_collinear(_clean(c, True), tol) for c, loop in chains if loop]
+    out = [r for r in out if len(r) >= 3 and abs(_signed_area(r[:, :2])) > SLIVER_AREA]
+    out.sort(key=lambda r: -abs(_signed_area(r[:, :2])))
+    return [_new(r + origin, True, layer) for r in out]
+
+
+# -- corners ---------------------------------------------------------------------
+
+
+def _corner_cut(
+    s: String, size: float, mode: Literal["fillet", "chamfer"], arc_step_deg: float
+) -> String:
+    if size <= 0:
+        raise StringError("the radius or distance must be positive")
+    if not 0.1 <= arc_step_deg <= 45:
+        raise StringError("the arc step must be between 0.1 and 45 degrees")
+    p = _need(s, 3)
+    n = len(p)
+    corners = range(n) if s.closed else range(1, n - 1)
+    out: list[Floats] = [] if s.closed else [p[:1]]
+    for k in corners:
+        prev, here, nxt = p[k - 1], p[k], p[(k + 1) % n]
+        u = here[:2] - prev[:2]
+        v = nxt[:2] - here[:2]
+        lu, lv = float(np.linalg.norm(u)), float(np.linalg.norm(v))
+        u, v = u / lu, v / lv
+        turn = math.atan2(float(_cross2(u, v)), float(np.dot(u, v)))
+        if abs(turn) < 1e-9 or abs(abs(turn) - math.pi) < 1e-9:
+            out.append(here[None, :])
+            continue
+        # each corner may use at most half of each neighbouring segment
+        room = min(lu, lv) / 2
+        back = size * math.tan(abs(turn) / 2) if mode == "fillet" else size
+        back = min(back, room)
+        a = here + (prev - here) * (back / lu)
+        b = here + (nxt - here) * (back / lv)
+        if mode == "chamfer":
+            out.append(np.array([a, b]))
+            continue
+        radius = back / math.tan(abs(turn) / 2)
+        side = 1.0 if turn > 0 else -1.0
+        centre = a[:2] + side * radius * np.array([-u[1], u[0]])
+        steps = max(1, math.ceil(abs(turn) / math.radians(arc_step_deg)))
+        start = math.atan2(*(a[:2] - centre)[::-1])
+        ang = start + np.linspace(0.0, turn, steps + 1)
+        frac = np.linspace(0.0, 1.0, steps + 1)
+        arc = np.column_stack(
+            [
+                centre[0] + radius * np.cos(ang),
+                centre[1] + radius * np.sin(ang),
+                a[2] + frac * (b[2] - a[2]),
+            ]
+        )
+        out.append(arc)
+    if not s.closed:
+        out.append(p[-1:])
+    return _new(_clean(np.vstack(out), s.closed), s.closed, s.layer)
+
+
+def fillet(s: String, radius: float, arc_step_deg: float = 10.0) -> String:
+    """Round every corner with a circular arc of ``radius`` (plan).
+
+    Where the arc would need more than half of a neighbouring segment the
+    radius at that corner is reduced to fit. z runs linearly along each arc
+    between its tangent points."""
+    return _corner_cut(s, radius, "fillet", arc_step_deg)
+
+
+def chamfer(s: String, distance: float) -> String:
+    """Cut every corner with a straight line from ``distance`` back along the
+    incoming segment to ``distance`` along the outgoing one (reduced to half
+    a segment where the segment is shorter)."""
+    return _corner_cut(s, distance, "chamfer", 10.0)

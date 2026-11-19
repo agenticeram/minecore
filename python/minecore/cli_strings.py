@@ -7,6 +7,8 @@
     minecore string split P.mcproj SET --index 0 --vertex 12 --out parts
     minecore string join P.mcproj SET --index 0 --index 1 --out joined
     minecore string intersect P.mcproj SET_A SET_B [--csv out.csv]
+    minecore string boolean P.mcproj SET_A SET_B --op difference --out result
+    minecore string edit P.mcproj SET fillet --radius 10 --out rounded
 
 ``edit`` applies one operation to the chosen strings (all by default) and
 saves the whole set, the other strings unchanged, under ``--out`` (which may
@@ -25,10 +27,21 @@ from minecore import stringops as so
 from minecore.project import Project
 from minecore.strings import String, StringError, load_strings, save_strings, string_names
 
-OPERATIONS = ("reverse", "simplify", "resample", "smooth", "offset", "trim", "close", "open")
+OPERATIONS = (
+    "reverse",
+    "simplify",
+    "resample",
+    "smooth",
+    "offset",
+    "trim",
+    "close",
+    "open",
+    "fillet",
+    "chamfer",
+)
 
 
-def add_parsers(commands: Any) -> None:
+def add_parsers(commands: Any) -> None:  # noqa: PLR0915 - one argument per line
     sp = commands.add_parser("string", help="edit and measure string (polyline) sets")
     cmds = sp.add_subparsers(dest="st_command", metavar="ACTION", required=True)
     ls = cmds.add_parser("list", help="string sets, or the strings of one set")
@@ -61,6 +74,7 @@ def add_parsers(commands: Any) -> None:
     ed.add_argument("--boundary", help="trim: string set to trim or extend to")
     ed.add_argument("--end", choices=("start", "end", "both"), default="end")
     ed.add_argument("--max-extension", type=float, default=math.inf, help="trim: m")
+    ed.add_argument("--radius", type=float, help="fillet: corner radius, m")
     sl = cmds.add_parser("split", help="cut a string at a vertex")
     sl.add_argument("project")
     sl.add_argument("set")
@@ -78,6 +92,12 @@ def add_parsers(commands: Any) -> None:
     it.add_argument("set_a")
     it.add_argument("set_b")
     it.add_argument("--csv", help="write the crossings to a CSV file")
+    bo = cmds.add_parser("boolean", help="plan union/difference/intersection of closed strings")
+    bo.add_argument("project")
+    bo.add_argument("set_a")
+    bo.add_argument("set_b")
+    bo.add_argument("--op", choices=("union", "intersection", "difference", "xor"), required=True)
+    bo.add_argument("--out", required=True)
 
 
 def _pick(strings: list[String], index: list[int] | None) -> list[int]:
@@ -158,6 +178,10 @@ def _edit_one(  # noqa: PLR0911 - one return per operation
         return [so.resample(s, _need(args.spacing, "--spacing", op))]
     if op == "smooth":
         return [so.smooth(s, args.iterations)]
+    if op == "fillet":
+        return [so.fillet(s, _need(args.radius, "--radius", op))]
+    if op == "chamfer":
+        return [so.chamfer(s, _need(args.distance, "--distance", op))]
     if op in ("close", "open"):
         return [so.set_closed(s, op == "close")]
     if op == "offset":
@@ -239,6 +263,19 @@ def _intersect(project: Project, args: argparse.Namespace, out: TextIO) -> None:
                 w.writerow([i, j, f"{c.x:.4f}", f"{c.y:.4f}", f"{c.z_a:.4f}", f"{c.z_b:.4f}"])
 
 
+def _boolean(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    a = [s for s in load_strings(project, args.set_a) if s.closed]
+    b = [s for s in load_strings(project, args.set_b) if s.closed]
+    if not a or not b:
+        raise StringError("both sets need at least one closed string")
+    result = so.boolean(a, b, args.op)
+    if not result:
+        raise StringError(f"the {args.op} is empty")
+    save_strings(project, args.out, result)
+    area = sum(so.measure(s).area * (1 if so.is_outer(s) else -1) for s in result)
+    out.write(f"saved '{args.out}': {len(result)} strings, net area {area:.3f} m2\n")
+
+
 def string_command(args: argparse.Namespace, out: TextIO) -> int:
     handlers = {
         "list": _list,
@@ -247,6 +284,7 @@ def string_command(args: argparse.Namespace, out: TextIO) -> int:
         "split": _split,
         "join": _join,
         "intersect": _intersect,
+        "boolean": _boolean,
     }
     with Project.open(args.project) as project:
         handlers[args.st_command](project, args, out)

@@ -19,6 +19,12 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
   Turkish; 135 feature groups `E-XX-NN`). Shared engines first: CAD kernel
   (P1), scheduling/network/equipment engines (P5). Current phase: P1,
   starting with string editing gaps (E-CD-01).
+- 2026-11-19: P1 step 1b (E-CD-01 part 2): `stringops.boolean` (union,
+  intersection, difference, xor of closed-string sets), `fillet`, `chamfer`,
+  CLI `string boolean` and `edit fillet|chamfer`; editor snapping, typed
+  X/Y and bearing/distance/gradient entry, two-point measure, fillet/chamfer
+  and booleans against the background set. Next in P1: string attributes,
+  then surface tools (E-CD-02).
 - 2026-11-19: P1 step 1 (E-CD-01 part 1): `minecore.stringops` string
   toolbox (reverse, split, join, measure, simplify, resample, smooth,
   intersections, trim/extend, offset with mitre/round joins and dz/slope),
