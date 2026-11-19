@@ -4,6 +4,12 @@ Strings are edited in plan (x, y); each new or moved point takes its z from
 the "Kot" field or, when a surface is chosen, from that surface (draped).
 The editor works on a copy and writes the whole set back on save, so a set
 can be loaded, changed and saved under the same or a new name.
+
+The "İşlem" box applies the string toolbox (:mod:`minecore.stringops`) to the
+selected string: reverse, simplify, resample, smooth, offset (with a
+vertical shift), trim/extend to the background set and join with the nearest
+string. "Noktadan böl" mode cuts a string at the clicked vertex. The selected
+string's length, area and z range are shown under the buttons.
 """
 
 from __future__ import annotations
@@ -30,13 +36,33 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from minecore import stringops as so
 from minecore import surfaces
 from minecore.gui.layout import fit_to_screen, scroll_panel
 from minecore.gui.resource import _row, _spin
 from minecore.project import Project
-from minecore.strings import String, load_strings, save_strings, string_names
+from minecore.strings import String, StringError, load_strings, save_strings, string_names
 
-MODES = ["Nokta ekle", "Nokta taşı", "Araya nokta ekle", "Nokta sil", "Çizgi seç"]
+MODES = [
+    "Nokta ekle",
+    "Nokta taşı",
+    "Araya nokta ekle",
+    "Nokta sil",
+    "Çizgi seç",
+    "Noktadan böl",
+]
+# operation label, value label, default value, minimum, maximum
+OPERATIONS = [
+    ("Yönü ters çevir", "", 0.0, 0.0, 0.0),
+    ("Sadeleştir (tolerans, m)", "Tolerans (m)", 0.1, 0.0, 1e4),
+    ("Yeniden örnekle (aralık, m)", "Aralık (m)", 5.0, 0.01, 1e5),
+    ("Yumuşat (tekrar sayısı)", "Tekrar", 2.0, 1.0, 10.0),
+    ("Ötele: dışa / sola (m)", "Mesafe (m)", 5.0, 0.001, 1e5),
+    ("Ötele: içe / sağa (m)", "Mesafe (m)", 5.0, 0.001, 1e5),
+    ("Ucu arka plan setine uzat / kırp", "", 0.0, 0.0, 0.0),
+    ("Başı arka plan setine uzat / kırp", "", 0.0, 0.0, 0.0),
+    ("En yakın açık çizgiyle birleştir", "En büyük boşluk (m)", 1.0, 0.0, 1e5),
+]
 PICK_PX = 10.0
 
 
@@ -88,6 +114,24 @@ class StringEditor(QDialog):
             b = QPushButton(text)
             b.clicked.connect(self._guard(slot))
             form.addRow(b)
+        self.operation = QComboBox()
+        self.operation.addItems([op[0] for op in OPERATIONS])
+        self.operation.currentIndexChanged.connect(self._operation_changed)
+        form.addRow("İşlem", self.operation)
+        self.op_value = _spin(0.0, 0.0, 1e5, 0.5, 3)
+        self.op_value_label = QLabel()
+        form.addRow(self.op_value_label, self.op_value)
+        self.op_dz = _spin(0.0, -1e4, 1e4, 0.5, 3)
+        self.op_round = QComboBox()
+        self.op_round.addItems(["Keskin köşe", "Yuvarlak köşe"])
+        form.addRow("Öteleme: kot farkı (m), köşe", _row(self.op_dz, self.op_round))
+        run_op = QPushButton("Seçili çizgiye uygula")
+        run_op.clicked.connect(self._guard(self.apply_operation))
+        form.addRow(run_op)
+        self.measure_label = QLabel()
+        self.measure_label.setWordWrap(True)
+        form.addRow(self.measure_label)
+        self._operation_changed(0)
         self.name = QLineEdit()
         self.name.setPlaceholderText("örn. tasarim_taban")
         save = QPushButton("Kaydet")
@@ -253,6 +297,104 @@ class StringEditor(QDialog):
         self.current = line
         self.redraw()
 
+    # ----- string toolbox ---------------------------------------------------------
+
+    def _operation_changed(self, index: int) -> None:
+        _label, value_label, default, lo, hi = OPERATIONS[index]
+        self.op_value_label.setText(value_label or "(değer yok)")
+        self.op_value.setEnabled(bool(value_label))
+        self.op_value.setRange(lo, hi)
+        self.op_value.setValue(default)
+        offset = index in (4, 5)
+        self.op_dz.setEnabled(offset)
+        self.op_round.setEnabled(offset)
+
+    def _as_string(self, line: _Line) -> String:
+        return String(line.points.copy(), line.closed and len(line.points) >= 3, line.layer)
+
+    def _replace_current(self, made: list[String]) -> None:
+        lines = [_Line(m.points, m.closed, m.layer) for m in made]
+        self.lines[self.current : self.current + 1] = lines
+        self.current = self.current if lines else -1
+
+    def _background_strings(self) -> list[String]:
+        if self.background.currentIndex() <= 0:
+            raise RuntimeError("Önce bir arka plan seti seçin (sınır çizgisi).")
+        return load_strings(self.project, self.background.currentText())
+
+    def apply_operation(self) -> None:
+        line = self._need_current()
+        s = self._as_string(line)
+        k, v = self.operation.currentIndex(), self.op_value.value()
+        if k == 0:
+            made = [so.reverse(s)]
+        elif k == 1:
+            made = [so.simplify(s, v)]
+        elif k == 2:
+            made = [so.resample(s, v)]
+        elif k == 3:
+            made = [so.smooth(s, int(v))]
+        elif k in (4, 5):
+            join = "round" if self.op_round.currentIndex() == 1 else "mitre"
+            made = so.offset(s, v if k == 4 else -v, join=join, dz=self.op_dz.value())  # type: ignore[arg-type]
+            if not made:
+                raise RuntimeError("Öteleme sonucunda çizgi kalmadı (mesafe çok büyük).")
+            self._remember()
+            self.lines += [_Line(m.points, m.closed, m.layer) for m in made]
+            self.current = len(self.lines) - 1
+            self.status.setText(f"{len(made)} ötelenmiş çizgi eklendi; kaynak çizgi korundu.")
+            self.redraw()
+            return
+        elif k in (6, 7):
+            end = "end" if k == 6 else "start"
+            made = []
+            for b in self._background_strings():
+                try:
+                    made = [so.trim_extend(s, b, end)]  # type: ignore[arg-type]
+                    break
+                except StringError:
+                    continue  # this boundary string is not reached; try the next
+            if not made:
+                raise RuntimeError("Çizginin ucu arka plan setindeki hiçbir çizgiye ulaşmıyor.")
+        else:
+            others = [i for i, ln in enumerate(self.lines) if i != self.current and not ln.closed]
+            if line.closed or not others:
+                raise RuntimeError("Birleştirmek için iki açık çizgi gerekir.")
+
+            def gap(i: int) -> float:
+                q = self.lines[i].points[[0, -1], :2]
+                p = line.points[[0, -1], :2]
+                return float(np.min(np.linalg.norm(p[:, None] - q[None], axis=2)))
+
+            other = min(others, key=gap)
+            joined = so.join(s, self._as_string(self.lines[other]), v if v > 0 else float("inf"))
+            self._remember()
+            keep = [ln for i, ln in enumerate(self.lines) if i not in (self.current, other)]
+            self.lines = [*keep, _Line(joined.points, False, line.layer)]
+            self.current = len(self.lines) - 1
+            self.redraw()
+            return
+        self._remember()
+        self._replace_current(made)
+        self.redraw()
+
+    def split_at(self, line: int, vertex: int) -> None:
+        """Cut a string at a vertex (an open string becomes two; a closed one opens)."""
+        parts = so.split(self._as_string(self.lines[line]), vertex)
+        self._remember()
+        self.current = line
+        self._replace_current(parts)
+        self.redraw()
+
+    def _measure_text(self) -> str:
+        if not 0 <= self.current < len(self.lines) or len(self.lines[self.current].points) < 2:
+            return ""
+        m = so.measure(self._as_string(self.lines[self.current]))
+        text = f"Seçili çizgi: {m.points} nokta, plan uzunluğu {m.plan_length:,.2f} m"
+        if m.closed:
+            text += f", alan {m.area:,.1f} m²"
+        return text + f", kot {m.z_min:.2f} / {m.z_max:.2f} m"
+
     # ----- picking ---------------------------------------------------------------
 
     def _nearest_vertex(self, event: MouseEvent) -> tuple[int, int] | None:
@@ -285,7 +427,7 @@ class StringEditor(QDialog):
                     best, where = d, (i, k)
         return where
 
-    def _press(self, event: MouseEvent) -> None:
+    def _press(self, event: MouseEvent) -> None:  # noqa: PLR0912 - one branch per mode
         if event.inaxes is not self.ax or self.toolbar.mode or event.xdata is None:
             return
         if event.button == MouseButton.RIGHT:
@@ -309,6 +451,10 @@ class StringEditor(QDialog):
                 hit = self._nearest_vertex(event)
                 if hit is not None:
                     self.delete_point(*hit)
+            elif mode == 5:
+                hit = self._nearest_vertex(event)
+                if hit is not None:
+                    self.split_at(*hit)
             else:
                 hit = self._nearest_vertex(event) or self._nearest_segment(event)
                 self.current = hit[0] if hit is not None else -1
@@ -391,4 +537,5 @@ class StringEditor(QDialog):
             ax.set_ylim(box[1], box[3])
         n = len(self.lines[self.current].points) if 0 <= self.current < len(self.lines) else 0
         ax.set_title(f"{len(self.lines)} çizgi" + (f", seçili çizgi {n} nokta" if n else ""))
+        self.measure_label.setText(self._measure_text())
         self.canvas.draw_idle()  # type: ignore[no-untyped-call]
