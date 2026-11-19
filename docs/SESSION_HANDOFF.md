@@ -19,6 +19,14 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
   Turkish; 135 feature groups `E-XX-NN`). Shared engines first: CAD kernel
   (P1), scheduling/network/equipment engines (P5). Current phase: P1,
   starting with string editing gaps (E-CD-01).
+- 2026-11-19: P1 step 1 (E-CD-01 part 1): `minecore.stringops` string
+  toolbox (reverse, split, join, measure, simplify, resample, smooth,
+  intersections, trim/extend, offset with mitre/round joins and dz/slope),
+  CLI `minecore string list|measure|edit|split|join|intersect`, string
+  editor "İşlem" box and "Noktadan böl" mode. Tests: analytic squares,
+  L-shape, dumbbell split, circles, hypothesis star polygons. Next in P1:
+  polygon booleans, fillet/chamfer, snapping and coordinate entry (E-CD-01
+  part 2), then surface tools (E-CD-02).
 - 2026-11-18 (later): OC08 + OC09 added. `minecore.survey.stockpiles`: pile
   volume inside a toe outline above a base (previous surface, outline TIN,
   least squares plane with RMS, level), triangle or grid method, density

@@ -933,6 +933,44 @@ def test_string_editor_and_toe_design(qapp: QApplication, tmp_path: Path) -> Non
     project.close()
 
 
+def test_string_editor_toolbox(qapp: QApplication, tmp_path: Path) -> None:
+    from minecore.gui.strings_editor import StringEditor  # noqa: PLC0415
+    from minecore.strings import String, save_strings  # noqa: PLC0415
+
+    project = Project.create(tmp_path / "t.mcproj", "t")
+    save_strings(project, "duvar", [String(np.array([[50.0, -50, 0], [50, 50, 0]]), False)])
+    parent = QWidget()
+    ed = StringEditor(project, parent)
+    for x, y in ((0, 0), (10, 0), (10, 10), (0, 10)):
+        ed.add_point(x, y)
+    ed.toggle_closed()
+    assert "alan 100.0" in ed.measure_label.text()
+    ed.operation.setCurrentIndex(4)  # offset outwards
+    ed.op_value.setValue(2.0)
+    ed.op_dz.setValue(3.0)
+    ed.apply_operation()
+    assert len(ed.lines) == 2
+    assert "alan 196.0" in ed.measure_label.text()
+    assert np.allclose(ed.lines[1].points[:, 2], 3.0)
+    ed.current = 0
+    ed.operation.setCurrentIndex(2)  # resample every 2.5 m
+    ed.op_value.setValue(2.5)
+    ed.apply_operation()
+    assert len(ed.lines[0].points) == 16
+    ed.split_at(0, 0)
+    assert not ed.lines[0].closed
+    ed.new_line()
+    ed.add_point(20, 5)
+    ed.add_point(30, 5)
+    ed.background.setCurrentText("duvar")
+    ed.operation.setCurrentIndex(6)  # extend the end to the wall
+    ed.apply_operation()
+    assert ed.lines[ed.current].points[-1, 0] == pytest.approx(50.0)
+    ed.undo()
+    assert ed.lines[ed.current].points[-1, 0] == pytest.approx(30.0)
+    project.close()
+
+
 def test_grade_control_dialog(qapp: QApplication, tmp_path: Path) -> None:
     from minecore.gui.gradecontrol import GradeControlDialog  # noqa: PLC0415
     from minecore.strings import String, load_strings, save_strings  # noqa: PLC0415

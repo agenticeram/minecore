@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from importlib.metadata import version
 from typing import Any, TextIO
 
-from minecore import _core, cli_modelling, cli_survey, coords
+from minecore import _core, cli_modelling, cli_strings, cli_survey, coords
 from minecore._core import MineCoreError
 from minecore.jobs import CancelledError
 from minecore.project import Project
@@ -111,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     fit.add_argument("--json", action="store_true", help="print machine-readable JSON")
     cli_modelling.add_parsers(commands)
     cli_survey.add_parsers(commands)
+    cli_strings.add_parsers(commands)
     return parser
 
 
@@ -271,6 +272,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
         "grid": _grid_command,
         **cli_modelling.HANDLERS,
         **cli_survey.HANDLERS,
+        **cli_strings.HANDLERS,
     }
     if args.command in handlers:
         try:

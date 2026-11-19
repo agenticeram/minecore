@@ -365,8 +365,23 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 
 - String editor (GUI "Çizgi düzenleyici"): plan view only (no section or 3D
   editing), points get z from a constant or a draped surface; no snapping,
-  no offsetting or smoothing, no string clipping or joining, undo within the
-  session only. GUI only (strings are imported with `strings import`).
+  undo within the session only.
+- String toolbox (`minecore.stringops`, CLI `string ...`, editor "İşlem";
+  E-CD-01, P1): reverse, split, join, close/open, measure, Douglas-Peucker
+  simplify, resample, Chaikin smooth, plan intersections, trim/extend to a
+  boundary, plan offset with mitre or round joins and a vertical shift.
+  Not yet: polygon booleans (union, difference, intersection of closed
+  strings), fillet and chamfer, snapping, coordinate/bearing entry while
+  digitising, attribute fields beyond the layer name.
+- Offset: plan only (the vertical shift is constant along the string, so a
+  string with varying z is moved up or down rigidly). Closed strings use the
+  positive winding fill of the raw offset (holes that an outward offset
+  encloses are dropped). Open strings keep the parts at the full distance
+  from the source; a string that folds back on itself may give several
+  pieces or none. Round joins are circumscribed polylines (10 degree steps
+  by default), so their corners lie up to 0.4 % beyond the distance.
+  Checked on 6,000 random star polygons and open walks; a 4,000-point
+  string takes under a second.
 - Toe design (`pit design-toes`, GUI "Taban çizgisinden pit tasarımı"):
   benches are expanded on a raster with the same distance-transform
   envelope as the optimised-pit bench design (rounded corners, raster
