@@ -254,6 +254,105 @@ def _inside(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
     return np.asarray(Path(poly).contains_points(pts))
 
 
+# -- polygon booleans and corners --------------------------------------------------
+
+
+def _box(x: float, y: float, w: float, h: float | None = None) -> String:
+    h = w if h is None else h
+    return _s([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], closed=True)
+
+
+def _net_area(result: list[String]) -> float:
+    return sum(so._signed_area(r.points[:, :2]) for r in result)
+
+
+@pytest.mark.parametrize(
+    ("op", "area", "parts"),
+    [("union", 7.0, 1), ("intersection", 1.0, 1), ("difference", 3.0, 1), ("xor", 6.0, None)],
+)
+def test_boolean_overlapping_squares(op: str, area: float, parts: int | None) -> None:
+    result = so.boolean([_box(0, 0, 2)], [so.reverse(_box(1, 1, 2))], op)  # type: ignore[arg-type]
+    assert _net_area(result) == pytest.approx(area)
+    if parts is not None:
+        assert len(result) == parts
+    assert all(so.is_outer(r) for r in result)
+
+
+def test_boolean_shared_edges_holes_and_empty() -> None:
+    merged = so.boolean([_box(0, 0, 2)], [_box(2, 0, 2)], "union")
+    assert len(merged) == 1
+    assert len(merged[0].points) == 4  # the shared edge and its vertices disappear
+    assert _net_area(merged) == pytest.approx(8.0)
+    holed = so.boolean([_box(0, 0, 10)], [_box(3, 3, 2)], "difference")
+    assert [so.is_outer(r) for r in holed] == [True, False]
+    assert _net_area(holed) == pytest.approx(96.0)
+    # a nested string in one set is a hole (even-odd rule)
+    ring = [_box(0, 0, 10), _box(3, 3, 2)]
+    # the strip covers half of the hole: 96 + 2
+    assert _net_area(so.boolean(ring, [_box(4, 0, 2, 10)], "union")) == pytest.approx(98.0)
+    assert so.boolean([_box(0, 0, 2)], [_box(0, 0, 2)], "difference") == []
+    assert so.boolean([_box(0, 0, 1)], [_box(5, 5, 1)], "intersection") == []
+    with pytest.raises(StringError):
+        so.boolean([_s([[0, 0], [1, 0], [1, 1]])], [_box(0, 0, 1)], "union")
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    st.lists(st.floats(1.0, 5.0), min_size=3, max_size=16),
+    st.lists(st.floats(1.0, 5.0), min_size=3, max_size=16),
+    st.floats(-3.0, 3.0),
+    st.floats(-3.0, 3.0),
+)
+def test_boolean_matches_point_classification(
+    ra: list[float], rb: list[float], dx: float, dy: float
+) -> None:
+    """Every sample point is inside the result exactly when the rule says so,
+    judged by an independent point-in-polygon test (matplotlib)."""
+
+    def star(radii: list[float], cx: float, cy: float) -> String:
+        ang = np.linspace(0, 2 * np.pi, len(radii), endpoint=False)
+        r = np.asarray(radii)
+        return _s(np.column_stack([cx + r * np.cos(ang), cy + r * np.sin(ang)]).tolist(), True)
+
+    a, b = star(ra, 0.0, 0.0), star(rb, dx, dy)
+    q = np.random.default_rng(0).uniform(-9, 9, (4000, 2))
+    in_a, in_b = _inside(q, a.points[:, :2]), _inside(q, b.points[:, :2])
+    expected = {
+        "union": in_a | in_b,
+        "intersection": in_a & in_b,
+        "difference": in_a & ~in_b,
+        "xor": in_a ^ in_b,
+    }
+    for op, want in expected.items():
+        got = np.zeros(len(q), bool)
+        for r in so.boolean([a], [b], op):  # type: ignore[arg-type]
+            got ^= _inside(q, r.points[:, :2])
+        assert (got == want).all(), op
+
+
+def test_fillet_square_area_and_tangents() -> None:
+    r = 2.0
+    rounded = so.fillet(SQUARE, r, arc_step_deg=10.0)
+    # each 90 degree corner becomes 9 chords of a radius-2 arc
+    chord_area = 4 * 9 * 0.5 * r * r * math.sin(math.radians(10.0))
+    assert so.measure(rounded).area == pytest.approx(100 - 4 * r * r + chord_area)
+    dist = np.hypot(*(rounded.points[:, :2] - [r, r]).T)
+    corner = (rounded.points[:, 0] <= r) & (rounded.points[:, 1] <= r)
+    assert np.allclose(dist[corner], r)
+    line = _s([[0, 0, 0], [10, 0, 0], [10, 10, 10]])
+    f = so.fillet(line, 2.0)
+    assert np.allclose(f.points[[0, 1, -2, -1]], [[0, 0, 0], [8, 0, 0], [10, 2, 2], [10, 10, 10]])
+    # a radius too big for the segments is reduced to use half of each
+    big = so.fillet(_s([[0, 0], [4, 0], [4, 4]]), 100.0)
+    assert np.allclose(big.points[[1, -2], :2], [[2, 0], [4, 2]])
+
+
+def test_chamfer_square() -> None:
+    c = so.chamfer(SQUARE, 1.0)
+    assert len(c.points) == 8
+    assert so.measure(c).area == pytest.approx(100 - 4 * 0.5)
+
+
 # -- command line ---------------------------------------------------------------
 
 
@@ -342,3 +441,18 @@ def test_cli_split_join_intersect(tmp_path: Path) -> None:
     out = io.StringIO()
     assert cli.main(["string", "intersect", str(path), "a", "a"], out) == 0
     assert "5.000 0.000" in out.getvalue()
+
+
+def test_cli_boolean_and_fillet(tmp_path: Path) -> None:
+    path = tmp_path / "b.mcproj"
+    with Project.create(path, "b") as project:
+        save_strings(project, "a", [_box(0, 0, 2)])
+        save_strings(project, "b", [_box(1, 1, 2)])
+    out = io.StringIO()
+    args = ["string", "boolean", str(path), "a", "b", "--op", "union", "--out", "u"]
+    assert cli.main(args, out) == 0
+    assert "net area 7.000" in out.getvalue()
+    args = ["string", "edit", str(path), "u", "chamfer", "--distance", "0.25", "--out", "c"]
+    assert cli.main(args, io.StringIO()) == 0
+    with Project.open(path) as project:
+        assert len(load_strings(project, "c")[0].points) == 16

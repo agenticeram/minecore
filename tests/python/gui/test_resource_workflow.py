@@ -933,12 +933,16 @@ def test_string_editor_and_toe_design(qapp: QApplication, tmp_path: Path) -> Non
     project.close()
 
 
-def test_string_editor_toolbox(qapp: QApplication, tmp_path: Path) -> None:
+def test_string_editor_toolbox(  # noqa: PLR0915 - one workflow
+    qapp: QApplication, tmp_path: Path
+) -> None:
     from minecore.gui.strings_editor import StringEditor  # noqa: PLC0415
     from minecore.strings import String, save_strings  # noqa: PLC0415
 
     project = Project.create(tmp_path / "t.mcproj", "t")
     save_strings(project, "duvar", [String(np.array([[50.0, -50, 0], [50, 50, 0]]), False)])
+    cut = np.array([[5.0, -5, 0], [20, -5, 0], [20, 20, 0], [5, 20, 0]])
+    save_strings(project, "kesik", [String(cut, True)])
     parent = QWidget()
     ed = StringEditor(project, parent)
     for x, y in ((0, 0), (10, 0), (10, 10), (0, 10)):
@@ -968,6 +972,33 @@ def test_string_editor_toolbox(qapp: QApplication, tmp_path: Path) -> None:
     assert ed.lines[ed.current].points[-1, 0] == pytest.approx(50.0)
     ed.undo()
     assert ed.lines[ed.current].points[-1, 0] == pytest.approx(30.0)
+    # typed coordinates, bearing/distance/gradient, two-point measure
+    ed.new_line()
+    ed.coord_x.setValue(100.0)
+    ed.coord_y.setValue(100.0)
+    ed.add_typed_point()
+    ed.bearing.setValue(90.0)
+    ed.distance.setValue(20.0)
+    ed.grade.setValue(-10.0)
+    ed.add_bearing_point()
+    assert np.allclose(ed.lines[ed.current].points[-1], [120.0, 100.0, -2.0])
+    text = ed.measure_between(*ed.lines[ed.current].points)
+    assert "plan 20.000 m" in text
+    assert "azimut 90.00°" in text
+    assert "eğim -10.00%" in text
+    # fillet, then a polygon difference with a closed background set
+    ed.new_line()
+    for x, y in ((0, 0), (10, 0), (10, 10), (0, 10)):
+        ed.add_point(x, y)
+    ed.toggle_closed()
+    ed.background.setCurrentText("kesik")
+    ed.operation.setCurrentIndex(12)  # subtract the background set
+    ed.apply_operation()
+    assert "alan 50.0" in ed.measure_label.text()
+    ed.operation.setCurrentIndex(9)  # round the corners
+    ed.op_value.setValue(1.0)
+    ed.apply_operation()
+    assert len(ed.lines[ed.current].points) > 4
     project.close()
 
 

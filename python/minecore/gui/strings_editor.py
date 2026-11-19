@@ -50,7 +50,9 @@ MODES = [
     "Nokta sil",
     "Çizgi seç",
     "Noktadan böl",
+    "İki nokta ölç",
 ]
+SNAPS = ["Yakalama yok", "Noktaya yakala", "Nokta veya çizgiye yakala"]
 # operation label, value label, default value, minimum, maximum
 OPERATIONS = [
     ("Yönü ters çevir", "", 0.0, 0.0, 0.0),
@@ -62,7 +64,13 @@ OPERATIONS = [
     ("Ucu arka plan setine uzat / kırp", "", 0.0, 0.0, 0.0),
     ("Başı arka plan setine uzat / kırp", "", 0.0, 0.0, 0.0),
     ("En yakın açık çizgiyle birleştir", "En büyük boşluk (m)", 1.0, 0.0, 1e5),
+    ("Köşeleri yuvarlat (yarıçap, m)", "Yarıçap (m)", 5.0, 0.001, 1e5),
+    ("Köşeleri pahla (mesafe, m)", "Mesafe (m)", 2.0, 0.001, 1e5),
+    ("Arka plan setiyle birleşim (poligon)", "", 0.0, 0.0, 0.0),
+    ("Arka plan setini çıkar (poligon)", "", 0.0, 0.0, 0.0),
+    ("Arka plan setiyle kesişim (poligon)", "", 0.0, 0.0, 0.0),
 ]
+BOOLEAN_OPS = {11: "union", 12: "difference", 13: "intersection"}
 PICK_PX = 10.0
 
 
@@ -96,11 +104,29 @@ class StringEditor(QDialog):
         self.mode = QComboBox()
         self.mode.addItems(MODES)
         form.addRow("Fare ile", self.mode)
+        self.snap = QComboBox()
+        self.snap.addItems(SNAPS)
+        self.snap.setCurrentIndex(1)
+        form.addRow("Yakalama", self.snap)
         self.z = _spin(0.0, -1e5, 1e5, 1.0, 2)
         self.drape = QComboBox()
         self.drape.addItem("(sabit kot)")
         self.drape.addItems(surfaces.surface_names(project))
         form.addRow("Kot (m) / yüzeye oturt", _row(self.z, self.drape))
+        self.coord_x = _spin(0.0, -1e8, 1e8, 1.0, 3)
+        self.coord_y = _spin(0.0, -1e8, 1e8, 1.0, 3)
+        add_xy = QPushButton("Ekle")
+        add_xy.clicked.connect(self._guard(self.add_typed_point))
+        form.addRow("Koordinatla nokta (X, Y)", _row(self.coord_x, self.coord_y, add_xy))
+        self.bearing = _spin(0.0, 0.0, 360.0, 1.0, 4)
+        self.distance = _spin(10.0, 0.0, 1e6, 1.0, 3)
+        self.grade = _spin(0.0, -100.0, 100.0, 1.0, 3)
+        add_bd = QPushButton("Ekle")
+        add_bd.clicked.connect(self._guard(self.add_bearing_point))
+        form.addRow(
+            "Son noktadan azimut (°), mesafe (m), eğim (%)",
+            _row(self.bearing, self.distance, self.grade, add_bd),
+        )
         buttons = [
             ("Yeni çizgi başlat", self.new_line),
             ("Seçili çizgiyi kapat / aç", self.toggle_closed),
@@ -155,6 +181,7 @@ class StringEditor(QDialog):
         self.current = -1
         self.history: list[tuple[list[_Line], int]] = []
         self.drag: tuple[int, int] | None = None
+        self.measure_from: np.ndarray | None = None
         self.canvas.mpl_connect("button_press_event", self._press)
         self.canvas.mpl_connect("motion_notify_event", self._motion)
         self.canvas.mpl_connect("button_release_event", self._release)
@@ -256,9 +283,10 @@ class StringEditor(QDialog):
 
     # ----- editing operations (data coordinates; also used by tests) ---------------
 
-    def add_point(self, x: float, y: float) -> None:
+    def add_point(self, x: float, y: float, z: float | None = None) -> None:
         self._remember()
-        z = float(self._z_at(np.array([[x, y]]))[0])
+        if z is None or self.drape.currentIndex() > 0:
+            z = float(self._z_at(np.array([[x, y]]))[0])
         if not 0 <= self.current < len(self.lines):
             self.lines.append(_Line([[x, y, z]], closed=False))
             self.current = len(self.lines) - 1
@@ -266,6 +294,37 @@ class StringEditor(QDialog):
             line = self.lines[self.current]
             line.points = np.vstack([line.points, [x, y, z]])
         self.redraw()
+
+    def add_typed_point(self) -> None:
+        """Add the point typed in the X, Y boxes (z from the kot box or the surface)."""
+        self.add_point(self.coord_x.value(), self.coord_y.value())
+
+    def add_bearing_point(self) -> None:
+        """Add a point at a bearing and plan distance from the last point of the
+        selected string; z changes by the gradient (%) unless draped."""
+        line = self._need_current()
+        if not len(line.points):
+            raise RuntimeError("Seçili çizginin noktası yok.")
+        last = line.points[-1]
+        b = np.radians(self.bearing.value())
+        d = self.distance.value()
+        if d <= 0:
+            raise RuntimeError("Mesafe sıfırdan büyük olmalı.")
+        x, y = last[0] + d * np.sin(b), last[1] + d * np.cos(b)
+        self.add_point(float(x), float(y), float(last[2] + d * self.grade.value() / 100.0))
+
+    def measure_between(self, a: np.ndarray, b: np.ndarray) -> str:
+        """Plan and slope distance, bearing and gradient from a to b."""
+        d = b - a
+        plan = float(np.hypot(d[0], d[1]))
+        bearing = float(np.degrees(np.arctan2(d[0], d[1])) % 360.0)
+        text = (
+            f"Ölçüm: plan {plan:,.3f} m, eğik {float(np.linalg.norm(d)):,.3f} m, "
+            f"azimut {bearing:.2f}°, kot farkı {d[2]:+.3f} m"
+        )
+        if plan > 0:
+            text += f", eğim {100 * d[2] / plan:+.2f}%"
+        return text
 
     def move_point(self, line: int, vertex: int, x: float, y: float) -> None:
         pts = self.lines[line].points
@@ -322,7 +381,7 @@ class StringEditor(QDialog):
             raise RuntimeError("Önce bir arka plan seti seçin (sınır çizgisi).")
         return load_strings(self.project, self.background.currentText())
 
-    def apply_operation(self) -> None:
+    def apply_operation(self) -> None:  # noqa: PLR0912, PLR0915 - one branch per operation
         line = self._need_current()
         s = self._as_string(line)
         k, v = self.operation.currentIndex(), self.op_value.value()
@@ -345,6 +404,19 @@ class StringEditor(QDialog):
             self.status.setText(f"{len(made)} ötelenmiş çizgi eklendi; kaynak çizgi korundu.")
             self.redraw()
             return
+        elif k == 9:
+            made = [so.fillet(s, v)]
+        elif k == 10:
+            made = [so.chamfer(s, v)]
+        elif k in BOOLEAN_OPS:
+            if not s.closed:
+                raise RuntimeError("Poligon işlemleri için seçili çizgi kapalı olmalı.")
+            closed_bg = [b for b in self._background_strings() if b.closed]
+            if not closed_bg:
+                raise RuntimeError("Arka plan setinde kapalı çizgi yok.")
+            made = so.boolean([s], closed_bg, BOOLEAN_OPS[k])  # type: ignore[arg-type]
+            if not made:
+                raise RuntimeError("İşlem sonucunda alan kalmadı.")
         elif k in (6, 7):
             end = "end" if k == 6 else "start"
             made = []
@@ -427,17 +499,64 @@ class StringEditor(QDialog):
                     best, where = d, (i, k)
         return where
 
+    def _snap(  # noqa: PLR0912 - vertex pass, then segment pass
+        self, event: MouseEvent, skip: tuple[int, int] | None = None
+    ) -> tuple[float, float, float | None]:
+        """Mouse position snapped to the nearest vertex (or, if asked, segment) of
+        the edited strings and the background set within PICK_PX; a vertex also
+        gives its z."""
+        x, y = float(event.xdata), float(event.ydata)  # type: ignore[arg-type]
+        mode = self.snap.currentIndex()
+        if mode == 0:
+            return x, y, None
+        sets = [(i, ln.points, ln.closed) for i, ln in enumerate(self.lines)]
+        if self.background.currentIndex() > 0:
+            for s in load_strings(self.project, self.background.currentText()):
+                sets.append((-1, s.points, s.closed))
+        p = np.array([event.x, event.y], np.float64)
+        best, hit = PICK_PX, None
+        for i, pts, _closed in sets:
+            if not len(pts):
+                continue
+            px = self.ax.transData.transform(pts[:, :2])
+            d = np.hypot(px[:, 0] - p[0], px[:, 1] - p[1])
+            if skip is not None and skip[0] == i:
+                d[skip[1]] = np.inf
+            k = int(np.argmin(d))
+            if d[k] < best:
+                best, hit = float(d[k]), pts[k]
+        if hit is not None:
+            return float(hit[0]), float(hit[1]), float(hit[2])
+        if mode == 2:
+            best, where = PICK_PX, None
+            for i, pts, closed in sets:
+                n = len(pts)
+                if n < 2 or (skip is not None and skip[0] == i):
+                    continue
+                px = self.ax.transData.transform(pts[:, :2])
+                for k in range(n if closed else n - 1):
+                    a, b = px[k], px[(k + 1) % n]
+                    ab = b - a
+                    t = float(np.clip(np.dot(p - a, ab) / max(np.dot(ab, ab), 1e-12), 0, 1))
+                    dist = float(np.hypot(*(a + t * ab - p)))
+                    if dist < best:
+                        best = dist
+                        where = pts[k] + t * (pts[(k + 1) % n] - pts[k])
+            if where is not None:
+                return float(where[0]), float(where[1]), float(where[2])
+        return x, y, None
+
     def _press(self, event: MouseEvent) -> None:  # noqa: PLR0912 - one branch per mode
         if event.inaxes is not self.ax or self.toolbar.mode or event.xdata is None:
             return
         if event.button == MouseButton.RIGHT:
             self.new_line()
             return
-        x, y = float(event.xdata), float(event.ydata)  # type: ignore[arg-type]
         mode = self.mode.currentIndex()
         try:
+            x, y, z = self._snap(event)
             if mode == 0:
-                self.add_point(x, y)
+                self.add_point(x, y, z)
             elif mode == 1:
                 hit = self._nearest_vertex(event)
                 if hit is not None:
@@ -455,6 +574,14 @@ class StringEditor(QDialog):
                 hit = self._nearest_vertex(event)
                 if hit is not None:
                     self.split_at(*hit)
+            elif mode == 6:
+                here = np.array([x, y, z if z is not None else self.z.value()])
+                if self.measure_from is None:
+                    self.measure_from = here
+                    self.status.setText("Ölçüm: ikinci noktayı tıklayın.")
+                else:
+                    self.status.setText(self.measure_between(self.measure_from, here))
+                    self.measure_from = None
             else:
                 hit = self._nearest_vertex(event) or self._nearest_segment(event)
                 self.current = hit[0] if hit is not None else -1
@@ -465,7 +592,8 @@ class StringEditor(QDialog):
     def _motion(self, event: MouseEvent) -> None:
         if self.drag is None or event.inaxes is not self.ax or event.xdata is None:
             return
-        self.move_point(*self.drag, float(event.xdata), float(event.ydata))  # type: ignore[arg-type]
+        x, y, _z = self._snap(event, skip=self.drag)
+        self.move_point(*self.drag, x, y)
         self.redraw()
 
     def _release(self, _event: MouseEvent) -> None:

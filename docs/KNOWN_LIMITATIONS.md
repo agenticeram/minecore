@@ -364,15 +364,26 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 ## String editor and toe-string pit design
 
 - String editor (GUI "Çizgi düzenleyici"): plan view only (no section or 3D
-  editing), points get z from a constant or a draped surface; no snapping,
-  undo within the session only.
+  editing), points get z from a constant or a draped surface; undo within
+  the session only. Snapping (vertex, or vertex/segment) works on the edited
+  strings and the background set only, not on surfaces or solids; typed X/Y
+  and bearing/distance/gradient entry; two-point measure.
 - String toolbox (`minecore.stringops`, CLI `string ...`, editor "İşlem";
   E-CD-01, P1): reverse, split, join, close/open, measure, Douglas-Peucker
   simplify, resample, Chaikin smooth, plan intersections, trim/extend to a
-  boundary, plan offset with mitre or round joins and a vertical shift.
-  Not yet: polygon booleans (union, difference, intersection of closed
-  strings), fillet and chamfer, snapping, coordinate/bearing entry while
-  digitising, attribute fields beyond the layer name.
+  boundary, plan offset with mitre or round joins and a vertical shift,
+  fillet and chamfer of every corner (radius reduced to half the shorter
+  neighbouring segment where it does not fit), plan polygon booleans.
+  Not yet: per-corner fillet selection, attribute fields beyond the layer
+  name, 3D (section) editing.
+- Polygon booleans (`stringops.boolean`, CLI `string boolean`, editor
+  operations against the background set): plan only, even-odd rule inside
+  each set, holes returned as clockwise strings (there is no polygon-with-
+  holes type). Regions that touch at a single point may come out as one
+  figure-eight string. z on the result comes from the source boundaries;
+  where two boundaries coincide one of them is used. Checked against an
+  independent point-in-polygon test on 8,000 random star and rectangle
+  cases.
 - Offset: plan only (the vertical shift is constant along the string, so a
   string with varying z is moved up or down rigidly). Closed strings use the
   positive winding fill of the raw offset (holes that an outward offset
