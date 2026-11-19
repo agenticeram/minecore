@@ -14,6 +14,11 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
+- 2026-11-19: roadmap replaced by phases P1-P14 (ADR-0011, `docs/ROADMAP.md`),
+  built from a competitor feature inventory (owner's `katalog/envanter/`,
+  Turkish; 135 feature groups `E-XX-NN`). Shared engines first: CAD kernel
+  (P1), scheduling/network/equipment engines (P5). Current phase: P1,
+  starting with string editing gaps (E-CD-01).
 - 2026-11-18 (later): OC08 + OC09 added. `minecore.survey.stockpiles`: pile
   volume inside a toe outline above a base (previous surface, outline TIN,
   least squares plane with RMS, level), triangle or grid method, density
