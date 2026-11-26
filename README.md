@@ -15,12 +15,16 @@ minecore info               # check the install
 minecore-gui                # start the desktop application
 ```
 
-The Windows build (`MineCore-windows` artifact) holds `MineCore.exe` (desktop)
-and `minecore-cli.exe` (the same commands from a terminal). Every capability
-runs headless, e.g. `minecore bm report p.mcproj model au --cutoffs 0.3 0.5`.
-`minecore run workflow.txt` runs a file of commands, one per line, with
-`#` comments, `set NAME=value` / `%NAME%` variables and `^` line continuation;
-every line is checked before anything runs (`--check` only checks). See
+The desktop application has a CAD-style command line docked under the 3D
+view (Görünüm > Komut satırı, Ctrl+9). Command words open the matching tool
+(`KOMPOZIT`, `KESTIRIM`, `RAPOR`; a unique abbreviation is enough, `YARDIM`
+lists them) and full headless commands run on the open project without its
+path (`bm report model au --cutoffs 0.3 0.5`). Every capability also runs
+headless from a terminal, e.g. `minecore bm report p.mcproj model au`.
+`minecore run workflow.txt` (or `run workflow.txt` in the command line) runs a
+file of commands, one per line, with `#` comments, `set NAME=value` /
+`%NAME%` variables and `^` continuation; every line is checked before
+anything runs (`--check` only checks). See
 [docs/examples/is_akisi_ornek.txt](docs/examples/is_akisi_ornek.txt).
 
 ## Layout

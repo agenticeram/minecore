@@ -14,13 +14,16 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
-- 2026-11-26: command line on Windows. `minecore run SCRIPT` (`minecore.script`)
-  runs a file of CLI commands (comments, `set`/`%VAR%`, `--var`, `^`
-  continuation, all lines checked first, `--check`, `--keep-going`). The
-  Windows build adds a console `minecore-cli.exe` sharing `_internal` with
-  `MineCore.exe` (second PyInstaller run, merged with robocopy) and smoke-runs
-  a script with it in CI. Owner guide (Turkish) in project files
-  `kilavuz/komut-satiri.md`.
+- 2026-11-26: workbench command line (owner asked for an AutoCAD-style
+  command bar inside the program, not a separate exe). Bottom dock
+  `gui/command_line.py`: Turkish command words open the menu tools (unique
+  prefix, accent-insensitive, YARDIM lists), full CLI commands run on the
+  open project with its path inserted (`cli.project_argument_position`; the
+  GUI closes and reopens the project around the command for the write
+  lock), history, Enter repeats. `minecore run SCRIPT` (`minecore.script`)
+  runs command files (comments, `set`/`%VAR%`, `--var`, `^`, all lines
+  checked first); in the GUI `%PROJE%` is the open project. Owner guide
+  (Turkish) in project files `kilavuz/komut-satiri.md`.
 - 2026-11-19: roadmap replaced by phases P1-P14 (ADR-0011, `docs/ROADMAP.md`),
   built from a competitor feature inventory (owner's `katalog/envanter/`,
   Turkish; 135 feature groups `E-XX-NN`). Shared engines first: CAD kernel

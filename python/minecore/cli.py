@@ -349,3 +349,39 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
             return 1
     parser.print_help(stream)
     return 2
+
+
+def project_argument_position(argv: Sequence[str]) -> int | None:
+    """Index where a command's project argument goes, or None if it takes none.
+
+    Follows the sub-command words of ``argv`` (``bm report`` ...) through the
+    parser tree; the project is the first positional of the final parser when
+    it is named ``project`` or ``path``. Used by the workbench command line,
+    which supplies the open project so the user does not type its path.
+    """
+    parser: argparse.ArgumentParser = build_parser()
+    index = 0
+    while True:
+        subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        if not subs or index >= len(argv) or argv[index] not in subs[0].choices:
+            break
+        parser = subs[0].choices[argv[index]]
+        index += 1
+    if index == 0:
+        return None
+    positionals = [
+        a
+        for a in parser._actions
+        if not a.option_strings and not isinstance(a, argparse._SubParsersAction)
+    ]
+    if positionals and positionals[0].dest in ("project", "path"):
+        return index
+    return None
+
+
+def command_names() -> set[str]:
+    """The top-level command words (``bm``, ``drillholes``, ``run`` ...)."""
+    for action in build_parser()._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    return set()
