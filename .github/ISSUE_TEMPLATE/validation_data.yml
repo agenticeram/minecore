@@ -1,0 +1,45 @@
+name: Validation data / worked example
+description: A dataset or worked example with a known answer that MineCore should reproduce
+labels: [validation-data]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reference cases are as valuable as code: each one becomes an automated test.
+        Only share data you are allowed to publish under the MIT licence. Remove or
+        anonymise confidential coordinates, grades and company names.
+  - type: input
+    id: area
+    attributes:
+      label: Area and feature group
+      description: For example "Ventilation network, E-HV-03" or "Variogram, E-KE-04".
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Book, paper, standard or hand calculation (author, title, edition, page or table).
+    validations:
+      required: true
+  - type: textarea
+    id: inputs
+    attributes:
+      label: Inputs
+      description: Input values or an attached file (CSV preferred).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected results and tolerance
+      description: The published or calculated answer and how close MineCore must be.
+    validations:
+      required: true
+  - type: checkboxes
+    id: rights
+    attributes:
+      label: Permission
+      options:
+        - label: I may share this data publicly under the MIT licence, and confidential information has been removed.
+          required: true
