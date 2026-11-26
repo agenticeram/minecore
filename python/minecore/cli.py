@@ -7,7 +7,9 @@ tested without the desktop workbench.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import io
 import json
 import platform
 import sys
@@ -15,7 +17,7 @@ from collections.abc import Sequence
 from importlib.metadata import version
 from typing import Any, TextIO
 
-from minecore import _core, cli_modelling, cli_strings, cli_survey, coords
+from minecore import _core, cli_modelling, cli_strings, cli_survey, coords, script
 from minecore._core import MineCoreError
 from minecore.jobs import CancelledError
 from minecore.project import Project
@@ -44,6 +46,22 @@ def _write_info(out: TextIO, *, as_json: bool) -> None:
     out.write(f"  core engine : {info['core_engine']} ({info['core_build_profile']})\n")
     out.write(f"  python      : {info['python']}\n")
     out.write(f"  platform    : {info['platform']}\n")
+
+
+def _add_run_parser(commands: Any) -> None:
+    run = commands.add_parser(
+        "run", help="run the commands of a script file, one per line (see minecore.script)"
+    )
+    run.add_argument("script", help="text file: one command per line, # comments, set NAME=value")
+    run.add_argument(
+        "--var",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="value for %%NAME%% in the script (repeatable)",
+    )
+    run.add_argument("--check", action="store_true", help="only check every line, run nothing")
+    run.add_argument("--keep-going", action="store_true", help="continue after a failed command")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     cli_modelling.add_parsers(commands)
     cli_survey.add_parsers(commands)
     cli_strings.add_parsers(commands)
+    _add_run_parser(commands)
     return parser
 
 
@@ -258,6 +277,50 @@ def _project_command(args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _validate_argv(argv: list[str]) -> str | None:
+    """None when the arguments parse, else argparse's message."""
+    errors = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(errors), contextlib.redirect_stdout(io.StringIO()):
+            args = build_parser().parse_args(argv)
+    except SystemExit:
+        lines = [ln for ln in errors.getvalue().splitlines() if ln.strip()]
+        return lines[-1] if lines else "invalid arguments"
+    if args.command is None:
+        return "no command"
+    return None
+
+
+def _run_command(args: argparse.Namespace, out: TextIO) -> int:
+    variables: dict[str, str] = {}
+    for item in args.var:
+        name, sep, value = item.partition("=")
+        if not sep or not name:
+            sys.stderr.write(f"error: --var needs NAME=VALUE, got {item!r}\n")
+            return 2
+        variables[name] = value
+    try:
+        commands = script.parse_script(script.read_script_text(args.script), variables)
+    except (OSError, script.ScriptError) as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+    problems = script.check_commands(commands, _validate_argv)
+    if problems:
+        sys.stderr.write(
+            f"error: {len(problems)} line(s) of {args.script} are not valid; nothing was run\n"
+        )
+        for problem in problems:
+            sys.stderr.write(f"  {problem}\n")
+        return 2
+    if args.check:
+        for cmd in commands:
+            out.write(f"line {cmd.line}: {script.join_words(cmd.argv)}\n")
+        out.write(f"{len(commands)} commands, all valid\n")
+        return 0
+    result = script.run_commands(commands, main, out, keep_going=args.keep_going)
+    return 0 if result.ok else 1
+
+
 def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
     """Run the CLI and return the process exit code."""
     stream = sys.stdout if out is None else out
@@ -270,6 +333,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
         "project": _project_command,
         "crs": _crs_command,
         "grid": _grid_command,
+        "run": _run_command,
         **cli_modelling.HANDLERS,
         **cli_survey.HANDLERS,
         **cli_strings.HANDLERS,
