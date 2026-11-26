@@ -117,7 +117,7 @@ jobs:
           & $exe run dist/MineCore/is_akisi_ornek.txt --check
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: MineCore-windows
           path: dist/MineCore
