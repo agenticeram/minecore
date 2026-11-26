@@ -9,6 +9,11 @@ body:
       description: What you are trying to do and why. Which software or method do you use for it today?
     validations:
       required: true
+  - type: input
+    id: code
+    attributes:
+      label: Feature group and phase (if known)
+      description: Inventory code and roadmap phase from docs/ROADMAP.md, for example "E-CD-02, P1".
   - type: textarea
     id: method
     attributes:

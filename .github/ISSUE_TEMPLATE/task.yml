@@ -1,0 +1,41 @@
+name: Task
+description: A concrete piece of roadmap work with clear acceptance criteria
+labels: [task]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A task is one vertical slice: engine, command, GUI entry, tests and docs.
+        See the *Definition of done* in CONTRIBUTING.md.
+  - type: input
+    id: code
+    attributes:
+      label: Feature group and phase
+      description: Inventory code and roadmap phase, for example "E-CD-02, P1".
+      placeholder: E-CD-02, P1
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What the tool does, its inputs and outputs, and what is out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: method
+    attributes:
+      label: Method and references
+      description: Algorithm, textbook, paper or standard to follow.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: The known answer the tests must reproduce (analytic case, worked example, independent implementation) and the tolerance.
+    validations:
+      required: true
+  - type: textarea
+    id: interface
+    attributes:
+      label: Command and GUI entry
+      description: Proposed `minecore` CLI command and workbench menu location. User-entered thresholds are listed here as inputs.
