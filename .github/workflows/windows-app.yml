@@ -52,6 +52,26 @@ jobs:
           --hidden-import matplotlib.backends.backend_agg
           --icon python/minecore/gui/assets/minecore.ico
 
+      - name: Package the command-line program next to it (minecore-cli.exe)
+        shell: pwsh
+        run: |
+          uv run --no-sync --with "pyinstaller>=6.11" pyinstaller packaging/minecore_cli.py `
+            --name minecore-cli --console --noconfirm --clean `
+            --distpath build/cli-dist --workpath build/cli-work `
+            --collect-all pyvista --collect-all pyvistaqt --collect-submodules vtkmodules `
+            --collect-data pyproj --collect-binaries pyproj --collect-all pyarrow `
+            --collect-submodules minecore --collect-data minecore `
+            --exclude-module mypy --exclude-module mypyc --exclude-module mypy_extensions `
+            --hidden-import matplotlib.backends.backend_pdf --hidden-import matplotlib.backends.backend_svg `
+            --hidden-import matplotlib.backends.backend_agg `
+            --icon python/minecore/gui/assets/minecore.ico
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # Same Python and libraries: share MineCore's _internal; add only what is missing.
+          robocopy build/cli-dist/minecore-cli dist/MineCore /E /XC /XN /XO /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          Copy-Item docs/examples/is_akisi_ornek.txt dist/MineCore/
+          exit 0
+
       - name: Smoke test the packaged core
         shell: bash
         run: |
@@ -69,6 +89,33 @@ jobs:
           if (Test-Path $report) { Get-Content $report } else { Write-Output "no report written" }
           if ($p.ExitCode -ne 0) { exit 1 }
           if (-not (Test-Path "dist/MineCore/_internal/minecore/gui/assets/minecore.png")) { Write-Output "window icon not bundled"; exit 1 }
+
+      - name: Run a command script with the packaged minecore-cli.exe
+        shell: pwsh
+        run: |
+          $exe = "dist/MineCore/minecore-cli.exe"
+          & $exe info
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $sample = (Resolve-Path "python/minecore/gui/sample").Path
+          $proj = Join-Path $env:RUNNER_TEMP "cli smoke.mcproj"
+          @(
+            "set P=$proj",
+            'project create "%P%" --name smoke',
+            "drillholes import `"%P%`" `"$sample`"",
+            'drillholes composite "%P%" assay AU_PPM --length 2',
+            'bm create "%P%" m --source assay_komp_2m/AU_PPM --size 20 20 10',
+            'bm estimate "%P%" m assay_komp_2m/AU_PPM au --method idw --radius 150',
+            'bm report "%P%" m au --cutoffs 0 0.5 --density 2.5'
+          ) | Set-Content -Encoding utf8 smoke.txt
+          & $exe run smoke.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $exe contents $proj --json
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $exe stats $proj assay_komp_2m/AU_PPM --top-cut 5
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $exe commands | Select-Object -First 5
+          & $exe run dist/MineCore/is_akisi_ornek.txt --check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - uses: actions/upload-artifact@v4
         with:

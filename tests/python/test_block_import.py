@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 
 from minecore.blockmodel import BlockModel, BlockModelError, Grid
+from minecore.blockmodel.csvexport import export_block_model_csv
 from minecore.blockmodel.importer import import_block_csv, parse_units
-from minecore.gui.resource import export_block_model_csv
 from minecore.project import Project
 
 

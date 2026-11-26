@@ -10,6 +10,7 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 | Licences (Python) | Python runtime dependencies are tracked by hand in `docs/DEPENDENCIES.md`; only Rust is checked automatically (`cargo-deny`). | Packaging work (M12) or more Python dependencies |
 | i18n | CLI messages are English only. Turkish/English UI strings arrive with the workbench. | Workbench milestone |
 | Packaging | No Windows installer or signed build yet. | M12 |
+| Automation | External commands can change a project open in the workbench only in "PAYLAS" mode; the window reloads by polling the project file every 1.5 s. The workbench's own dialogs cannot be filled from outside (each tool has its own CLI command instead). Not every command has `--json` output yet. | Owner feedback |
 
 ## Drillhole data (M2, ADR-0008)
 

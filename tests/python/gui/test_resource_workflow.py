@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
+from minecore.blockmodel.csvexport import export_block_model_csv
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QWidget
@@ -135,7 +137,7 @@ def test_block_model_variogram_estimate_report(  # noqa: PLR0915 - one end-to-en
     assert len(rows) == 2 + len(report.rows)
 
     bm_csv = tmp_path / "bm.csv"
-    assert resource.export_block_model_csv(bm_csv, model) == grid.blocks
+    assert export_block_model_csv(bm_csv, model) == grid.blocks
     with bm_csv.open(encoding="utf-8-sig") as fh:
         header = next(csv.reader(fh, delimiter=";"))
     assert header[:6] == ["x", "y", "z", "i", "j", "k"]

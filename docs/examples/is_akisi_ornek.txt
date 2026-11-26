@@ -1,0 +1,22 @@
+# MineCore iş akışı örneği: sondajdan tenör-tonaj raporuna.
+# Çalıştırma: MineCore'da projeyi açın, alttaki Komut satırına yazın:
+#   run C:\MineCore\is_akisi_ornek.txt --check     (sadece satırları kontrol eder)
+#   run C:\MineCore\is_akisi_ornek.txt             (çalıştırır)
+#   run C:\MineCore\is_akisi_ornek.txt --var KESME=0.5
+# Kurallar: # ile başlayan satır nottur. set AD=değer değişken tanımlar,
+# %AD% yerine yazılır. Satır sonundaki ^ komutu alt satırda sürdürür.
+# Boşluk içeren yolları çift tırnak içine alın.
+# %PROJE% programda açık olan projedir; aşağıdaki set satırı yalnızca
+# program dışından (minecore run) çalıştırılırken kullanılır.
+
+set PROJE=C:\MineCore\deneme.mcproj
+set VERI=C:\MineCore\ornek-sondaj
+set KESME=0.3
+
+drillholes import "%PROJE%" "%VERI%"
+drillholes validate "%PROJE%"
+drillholes composite "%PROJE%" assay AU_PPM --length 2
+bm create "%PROJE%" model --source assay_komp_2m/AU_PPM --size 10 10 5
+bm estimate "%PROJE%" model assay_komp_2m/AU_PPM au ^
+    --method idw --radius 60
+bm report "%PROJE%" model au --cutoffs 0 %KESME% 0.5 1 --density 2.7

@@ -7,7 +7,9 @@ tested without the desktop workbench.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import io
 import json
 import platform
 import sys
@@ -15,7 +17,7 @@ from collections.abc import Sequence
 from importlib.metadata import version
 from typing import Any, TextIO
 
-from minecore import _core, cli_modelling, cli_strings, cli_survey, coords
+from minecore import _core, cli_modelling, cli_strings, cli_survey, cli_tools, coords, script
 from minecore._core import MineCoreError
 from minecore.jobs import CancelledError
 from minecore.project import Project
@@ -44,6 +46,46 @@ def _write_info(out: TextIO, *, as_json: bool) -> None:
     out.write(f"  core engine : {info['core_engine']} ({info['core_build_profile']})\n")
     out.write(f"  python      : {info['python']}\n")
     out.write(f"  platform    : {info['platform']}\n")
+
+
+def command_tree() -> list[tuple[str, str]]:
+    """Every runnable command with its one-line help, for discovery (``commands``)."""
+    found: list[tuple[str, str]] = []
+
+    def walk(parser: argparse.ArgumentParser, prefix: list[str]) -> None:
+        subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        if not subs:
+            return
+        helps = {c.dest: c.help or "" for c in subs[0]._choices_actions}
+        for name, child in subs[0].choices.items():
+            child_subs = [a for a in child._actions if isinstance(a, argparse._SubParsersAction)]
+            if child_subs:
+                walk(child, [*prefix, name])
+            else:
+                found.append((" ".join([*prefix, name]), helps.get(name, "")))
+
+    walk(build_parser(), [])
+    return found
+
+
+def _add_run_parser(commands: Any) -> None:
+    listing = commands.add_parser("commands", help="list every command with a one-line help")
+    listing.add_argument("--json", action="store_true")
+    run = commands.add_parser(
+        "run", help="run the commands of a script file, one per line (see minecore.script)"
+    )
+    run.add_argument(
+        "script", help="text file (or - for standard input): one command per line, # comments"
+    )
+    run.add_argument(
+        "--var",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="value for %%NAME%% in the script (repeatable)",
+    )
+    run.add_argument("--check", action="store_true", help="only check every line, run nothing")
+    run.add_argument("--keep-going", action="store_true", help="continue after a failed command")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,6 +154,8 @@ def build_parser() -> argparse.ArgumentParser:
     cli_modelling.add_parsers(commands)
     cli_survey.add_parsers(commands)
     cli_strings.add_parsers(commands)
+    cli_tools.add_parsers(commands)
+    _add_run_parser(commands)
     return parser
 
 
@@ -258,6 +302,51 @@ def _project_command(args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _validate_argv(argv: list[str]) -> str | None:
+    """None when the arguments parse, else argparse's message."""
+    errors = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(errors), contextlib.redirect_stdout(io.StringIO()):
+            args = build_parser().parse_args(argv)
+    except SystemExit:
+        lines = [ln for ln in errors.getvalue().splitlines() if ln.strip()]
+        return lines[-1] if lines else "invalid arguments"
+    if args.command is None:
+        return "no command"
+    return None
+
+
+def _run_command(args: argparse.Namespace, out: TextIO) -> int:
+    variables: dict[str, str] = {}
+    for item in args.var:
+        name, sep, value = item.partition("=")
+        if not sep or not name:
+            sys.stderr.write(f"error: --var needs NAME=VALUE, got {item!r}\n")
+            return 2
+        variables[name] = value
+    try:
+        text = sys.stdin.read() if args.script == "-" else script.read_script_text(args.script)
+        commands = script.parse_script(text, variables)
+    except (OSError, script.ScriptError) as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+    problems = script.check_commands(commands, _validate_argv)
+    if problems:
+        sys.stderr.write(
+            f"error: {len(problems)} line(s) of {args.script} are not valid; nothing was run\n"
+        )
+        for problem in problems:
+            sys.stderr.write(f"  {problem}\n")
+        return 2
+    if args.check:
+        for cmd in commands:
+            out.write(f"line {cmd.line}: {script.join_words(cmd.argv)}\n")
+        out.write(f"{len(commands)} commands, all valid\n")
+        return 0
+    result = script.run_commands(commands, main, out, keep_going=args.keep_going)
+    return 0 if result.ok else 1
+
+
 def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
     """Run the CLI and return the process exit code."""
     stream = sys.stdout if out is None else out
@@ -266,13 +355,30 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
     if args.command == "info":
         _write_info(stream, as_json=args.json)
         return 0
+    if args.command == "commands":
+        tree = command_tree()
+        if args.json:
+            _dump(stream, [{"command": c, "help": h} for c, h in tree])
+        else:
+            width = max(len(c) for c, _ in tree)
+            for c, h in tree:
+                stream.write(f"{c:{width}}  {h}\n")
+        stream.write(
+            ""
+            if args.json
+            else "\nDetails: minecore <command> --help. Projects are .mcproj "
+            "folders; run SCRIPT runs one command per line.\n"
+        )
+        return 0
     handlers = {
         "project": _project_command,
         "crs": _crs_command,
         "grid": _grid_command,
+        "run": _run_command,
         **cli_modelling.HANDLERS,
         **cli_survey.HANDLERS,
         **cli_strings.HANDLERS,
+        **cli_tools.HANDLERS,
     }
     if args.command in handlers:
         try:
@@ -285,3 +391,39 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
             return 1
     parser.print_help(stream)
     return 2
+
+
+def project_argument_position(argv: Sequence[str]) -> int | None:
+    """Index where a command's project argument goes, or None if it takes none.
+
+    Follows the sub-command words of ``argv`` (``bm report`` ...) through the
+    parser tree; the project is the first positional of the final parser when
+    it is named ``project`` or ``path``. Used by the workbench command line,
+    which supplies the open project so the user does not type its path.
+    """
+    parser: argparse.ArgumentParser = build_parser()
+    index = 0
+    while True:
+        subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        if not subs or index >= len(argv) or argv[index] not in subs[0].choices:
+            break
+        parser = subs[0].choices[argv[index]]
+        index += 1
+    if index == 0:
+        return None
+    positionals = [
+        a
+        for a in parser._actions
+        if not a.option_strings and not isinstance(a, argparse._SubParsersAction)
+    ]
+    if positionals and positionals[0].dest in ("project", "path"):
+        return index
+    return None
+
+
+def command_names() -> set[str]:
+    """The top-level command words (``bm``, ``drillholes``, ``run`` ...)."""
+    for action in build_parser()._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    return set()
