@@ -26,6 +26,8 @@ file of commands, one per line, with `#` comments, `set NAME=value` /
 `%NAME%` variables and `^` continuation; every line is checked before
 anything runs (`--check` only checks). See
 [docs/examples/is_akisi_ornek.txt](docs/examples/is_akisi_ornek.txt).
+The Windows build also ships `minecore-cli.exe` (console) so scripts and AI
+agents can drive every tool; see [docs/AUTOMATION.md](docs/AUTOMATION.md).
 
 ## Layout
 

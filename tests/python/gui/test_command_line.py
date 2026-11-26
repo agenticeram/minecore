@@ -79,3 +79,45 @@ def test_command_line_runs_words_and_commands_on_the_open_project(
     window.run_command("TEMIZLE")
     assert log.toPlainText() == ""
     window.close()
+
+
+def test_shared_project_lets_external_commands_write(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    path = tmp_path / "s.mcproj"
+    window = MainWindow()
+    window._set_project(Project.create(path, "s"))
+    cmd = [sys.executable, "-m", "minecore", "drillholes", "import", str(path), str(SAMPLE)]
+    blocked = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert blocked.returncode != 0
+    assert "open for writing" in blocked.stderr
+
+    window.run_command("PAYLAS")
+    assert window.shared
+    done = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    window._stamp = (0, 0)  # the timer would notice the change; do it now
+    window._check_external_change()
+    assert window.db is not None
+    assert "collar" in window.db.tables()
+    assert "dışarıdan değişti" in window.command.log.toPlainText()
+
+    # a workbench action takes the write lock for its duration, then gives it back
+    seen: list[bool] = []
+    monkeypatch.setattr(window, "composite", lambda: seen.append(window.project._lock is not None))  # type: ignore[union-attr]
+    window.aliases = workbench_aliases(window)
+    window.run_command("KOMPOZIT")
+    assert seen == [True]
+    again = subprocess.run(
+        [sys.executable, "-m", "minecore", "drillholes", "validate", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert again.returncode == 0, again.stderr
+    window.run_command("PAYLAS")
+    assert not window.shared
+    window.close()

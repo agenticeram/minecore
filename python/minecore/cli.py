@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from importlib.metadata import version
 from typing import Any, TextIO
 
-from minecore import _core, cli_modelling, cli_strings, cli_survey, coords, script
+from minecore import _core, cli_modelling, cli_strings, cli_survey, cli_tools, coords, script
 from minecore._core import MineCoreError
 from minecore.jobs import CancelledError
 from minecore.project import Project
@@ -48,11 +48,35 @@ def _write_info(out: TextIO, *, as_json: bool) -> None:
     out.write(f"  platform    : {info['platform']}\n")
 
 
+def command_tree() -> list[tuple[str, str]]:
+    """Every runnable command with its one-line help, for discovery (``commands``)."""
+    found: list[tuple[str, str]] = []
+
+    def walk(parser: argparse.ArgumentParser, prefix: list[str]) -> None:
+        subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        if not subs:
+            return
+        helps = {c.dest: c.help or "" for c in subs[0]._choices_actions}
+        for name, child in subs[0].choices.items():
+            child_subs = [a for a in child._actions if isinstance(a, argparse._SubParsersAction)]
+            if child_subs:
+                walk(child, [*prefix, name])
+            else:
+                found.append((" ".join([*prefix, name]), helps.get(name, "")))
+
+    walk(build_parser(), [])
+    return found
+
+
 def _add_run_parser(commands: Any) -> None:
+    listing = commands.add_parser("commands", help="list every command with a one-line help")
+    listing.add_argument("--json", action="store_true")
     run = commands.add_parser(
         "run", help="run the commands of a script file, one per line (see minecore.script)"
     )
-    run.add_argument("script", help="text file: one command per line, # comments, set NAME=value")
+    run.add_argument(
+        "script", help="text file (or - for standard input): one command per line, # comments"
+    )
     run.add_argument(
         "--var",
         action="append",
@@ -130,6 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     cli_modelling.add_parsers(commands)
     cli_survey.add_parsers(commands)
     cli_strings.add_parsers(commands)
+    cli_tools.add_parsers(commands)
     _add_run_parser(commands)
     return parser
 
@@ -300,7 +325,8 @@ def _run_command(args: argparse.Namespace, out: TextIO) -> int:
             return 2
         variables[name] = value
     try:
-        commands = script.parse_script(script.read_script_text(args.script), variables)
+        text = sys.stdin.read() if args.script == "-" else script.read_script_text(args.script)
+        commands = script.parse_script(text, variables)
     except (OSError, script.ScriptError) as exc:
         sys.stderr.write(f"error: {exc}\n")
         return 2
@@ -329,6 +355,21 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
     if args.command == "info":
         _write_info(stream, as_json=args.json)
         return 0
+    if args.command == "commands":
+        tree = command_tree()
+        if args.json:
+            _dump(stream, [{"command": c, "help": h} for c, h in tree])
+        else:
+            width = max(len(c) for c, _ in tree)
+            for c, h in tree:
+                stream.write(f"{c:{width}}  {h}\n")
+        stream.write(
+            ""
+            if args.json
+            else "\nDetails: minecore <command> --help. Projects are .mcproj "
+            "folders; run SCRIPT runs one command per line.\n"
+        )
+        return 0
     handlers = {
         "project": _project_command,
         "crs": _crs_command,
@@ -337,6 +378,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
         **cli_modelling.HANDLERS,
         **cli_survey.HANDLERS,
         **cli_strings.HANDLERS,
+        **cli_tools.HANDLERS,
     }
     if args.command in handlers:
         try:

@@ -218,6 +218,7 @@ WORKBENCH_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("DEKLINE", "Dekline ve kat galerileri", "decline"),
     ("KESITYAZDIR", "Kesiti PDF/PNG yazdır", "print_section"),
     ("YENILE", "Ekranı yenile", "refresh"),
+    ("PAYLAS", "Projeyi dış komutlara (yapay zeka, minecore-cli) aç / kapat", "toggle_shared"),
     ("KILAVUZ", "Adım adım kullanım kılavuzu", "guide"),
     ("ORNEK", "Örnek sondaj projesini aç", "open_sample"),
     ("SINA", "Kurulumu sına", "self_test"),

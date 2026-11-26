@@ -24,6 +24,14 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
   runs command files (comments, `set`/`%VAR%`, `--var`, `^`, all lines
   checked first); in the GUI `%PROJE%` is the open project. Owner guide
   (Turkish) in project files `kilavuz/komut-satiri.md`.
+  Then (owner: "cli da bulunsun", AI must drive the program without
+  computer use): console `minecore-cli.exe` restored in the Windows build;
+  `cli_tools.py` gives the menu tools that lacked a command one (`import
+  drillhole-file`, `export table|block-model|solid`, `stats`, `xval`,
+  `shell`, `blast`, `dump`, `selftest`, `contents`); `commands` lists all;
+  `run -` reads stdin; GUI "PAYLAS" mode (read-only between actions, reload on
+  change) lets external commands write while the window is open.
+  `docs/AUTOMATION.md`.
 - 2026-11-19: roadmap replaced by phases P1-P14 (ADR-0011, `docs/ROADMAP.md`),
   built from a competitor feature inventory (owner's `katalog/envanter/`,
   Turkish; 135 feature groups `E-XX-NN`). Shared engines first: CAD kernel

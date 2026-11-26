@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 
 from minecore import __version__, cli, solids, strings, surfaces
 from minecore.blockmodel import BlockModel, Grid
+from minecore.blockmodel.csvexport import export_block_model_csv
 from minecore.blockmodel.workflow import load_variograms
 from minecore.drillholes import (
     DrillholeDatabase,
@@ -75,11 +76,10 @@ from minecore.gui.resource import (
     ValidationDialog,
     VariogramDialog,
     block_models,
-    export_block_model_csv,
 )
 from minecore.io.dxf import read_dxf, write_dxf
 from minecore.pitopt.design import export_pit
-from minecore.project import Project
+from minecore.project import Project, ProjectLockedError
 from minecore.script import ScriptError, split_words
 
 SAMPLE_DIR = Path(__file__).resolve().parent / "sample"
@@ -282,6 +282,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Bir proje oluşturun veya açın.")
 
     def _command_dock(self) -> None:
+        self.shared = False  # project open read-only between actions (external commands)
+        self._stamp: tuple[int, int] | None = None
+        self._watch = QTimer(self)
+        self._watch.setInterval(1500)
+        self._watch.timeout.connect(self._check_external_change)
         self.aliases = command_line.workbench_aliases(self)
         self.command = command_line.CommandLine(
             self.aliases.names() + list(command_line.BUILTIN_WORDS), self
@@ -403,6 +408,10 @@ class MainWindow(QMainWindow):
         focus.setShortcut("Ctrl+Shift+K")
         focus.triggered.connect(self.focus_command_line)
         view.addAction(focus)
+        self.share_action = QAction("Projeyi dış komutlara aç (yapay zeka, minecore-cli)", self)
+        self.share_action.setCheckable(True)
+        self.share_action.toggled.connect(self.set_shared)
+        view.addAction(self.share_action)
         ug = self.menuBar().addMenu("Yer&altı")
         action(ug, "Pano zarfı (floating stope) ve pano seçimi...", self.stopes)
         action(ug, "Dekline ve kat galerileri...", self.decline)
@@ -481,12 +490,101 @@ class MainWindow(QMainWindow):
                 code = 1
             finally:
                 if reopen and path is not None:
-                    self._set_project(Project.open(path))
+                    self._set_project(Project.open(path, read_only=self.shared))
+                    self._stamp = self._project_stamp()
         self.command.write(out.getvalue() or "(çıktı yok)")
         self.command.write("Tamam." if code == 0 else f"Komut başarısız (kod {code}).")
         self.statusBar().showMessage("Komut tamamlandı." if code == 0 else "Komut başarısız.", 5000)
 
+    # -- sharing the project with external commands ----------------------------
+
+    def set_shared(self, on: bool) -> None:
+        """Hold the write lock only while a workbench action runs.
+
+        Between actions the project is open read-only, so ``minecore-cli`` (for
+        example driven by an AI agent) can change it; the window reloads when
+        the project file changes.
+        """
+        self.shared = on
+        if self.share_action.isChecked() != on:
+            self.share_action.setChecked(on)
+        if self.project is not None:
+            try:
+                self._reopen(read_only=on)
+            except ProjectLockedError as exc:
+                self.shared = True
+                self.share_action.setChecked(True)
+                self.command.write(f"Proje başka bir komut tarafından kullanılıyor: {exc}")
+        if on:
+            self._stamp = self._project_stamp()
+            self._watch.start()
+            self.command.write(
+                "Proje dış komutlara açık: minecore-cli ve yapay zeka projeyi değiştirebilir; "
+                "değişiklikler burada kendiliğinden görünür."
+            )
+        else:
+            self._watch.stop()
+            self.command.write("Proje yalnızca bu pencereden değiştirilebilir.")
+
+    def toggle_shared(self) -> None:
+        self.set_shared(not self.shared)
+
+    def _reopen(self, *, read_only: bool) -> None:
+        assert self.project is not None
+        path = self.project.path
+        self.project.close()
+        self.project = None
+        try:
+            self.project = Project.open(path, read_only=read_only)
+        except ProjectLockedError:
+            self.project = Project.open(path, read_only=True)
+            dbs = self.project.objects("drillhole_db")
+            self.db = DrillholeDatabase(self.project, dbs[0].object_id) if dbs else None
+            raise
+        dbs = self.project.objects("drillhole_db")
+        self.db = DrillholeDatabase(self.project, dbs[0].object_id) if dbs else None
+
+    def _project_stamp(self) -> tuple[int, int] | None:
+        if self.project is None:
+            return None
+        try:
+            st = (Path(self.project.path) / "project.sqlite").stat()
+        except OSError:
+            return None
+        return st.st_mtime_ns, st.st_size
+
+    def _check_external_change(self) -> None:
+        if not self.shared or self.project is None or QApplication.activeModalWidget():
+            return
+        stamp = self._project_stamp()
+        if stamp is not None and stamp != self._stamp:
+            self._stamp = stamp
+            with contextlib.suppress(Exception):
+                self._reopen(read_only=True)
+                self.refresh()
+                self.command.write("Proje dışarıdan değişti; görünüm yenilendi.")
+
     def _guard(self, slot: Any) -> None:
+        if self.shared and self.project is not None:
+            try:
+                self._reopen(read_only=False)
+            except ProjectLockedError:
+                QMessageBox.information(
+                    self,
+                    "MineCore",
+                    "Proje şu an bir dış komut (yapay zeka / minecore-cli) tarafından "
+                    "değiştiriliyor. Birkaç saniye sonra tekrar deneyin.",
+                )
+                return
+        try:
+            self._guarded(slot)
+        finally:
+            if self.shared and self.project is not None:
+                with contextlib.suppress(Exception):
+                    self._reopen(read_only=True)
+                self._stamp = self._project_stamp()
+
+    def _guarded(self, slot: Any) -> None:
         try:
             slot()
         except Exception as exc:
@@ -1840,8 +1938,10 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802 - Qt override
+        self._watch.stop()
         if self.project is not None:
             self.project.close()
+            self.project = None
         if hasattr(self.view, "close"):
             self.view.close()
         super().closeEvent(event)
