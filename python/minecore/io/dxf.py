@@ -1,4 +1,4 @@
-"""Write ASCII DXF (R12 entity subset: ``POLYLINE``/``VERTEX`` and ``3DFACE``).
+"""Write ASCII DXF (R12 entity subset: ``POLYLINE``/``VERTEX``, ``3DFACE``, ``TEXT``).
 
 R12 entities are read by every CAD and mining package. Only the ``ENTITIES``
 section is written (allowed by the DXF specification); layers are created
@@ -24,6 +24,15 @@ class Polyline:
     closed: bool = True
 
 
+@dataclass(frozen=True)
+class Text:
+    layer: str
+    position: Floats  # x, y, z of the insertion point
+    text: str
+    height: float = 2.5
+    rotation: float = 0.0  # degrees counter-clockwise from +x
+
+
 def _num(v: float) -> str:
     return f"{float(v):.6f}"
 
@@ -38,6 +47,7 @@ def write_dxf(
     path: Path,
     polylines: Iterable[Polyline] = (),
     faces: Sequence[tuple[str, Floats]] = (),
+    texts: Iterable[Text] = (),
 ) -> int:
     """``faces``: (layer, m x 3 x 3 triangle corners). Returns the entity count."""
     out: list[str] = ["0", "SECTION", "2", "ENTITIES"]
@@ -62,6 +72,12 @@ def write_dxf(
                 out += [f"1{k}", _num(corner[0]), f"2{k}", _num(corner[1])]
                 out += [f"3{k}", _num(corner[2])]
             count += 1
+    for t in texts:
+        x, y, z = (float(v) for v in t.position)
+        out += ["0", "TEXT", "8", _layer(t.layer)]
+        out += ["10", _num(x), "20", _num(y), "30", _num(z), "40", _num(t.height)]
+        out += ["1", t.text.replace("\n", " "), "50", _num(t.rotation)]
+        count += 1
     out += ["0", "ENDSEC", "0", "EOF"]
     path.write_text("\n".join(out) + "\n", encoding="ascii", errors="replace")
     return count

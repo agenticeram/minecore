@@ -28,7 +28,7 @@ from typing import Any, TextIO
 import numpy as np
 import numpy.typing as npt
 
-from minecore import strings, surfaces
+from minecore import cli_surfacetools, strings, surfaces
 from minecore.blockmodel import BlockModel, BlockModelError, Grid
 from minecore.blockmodel.calc import calculate
 from minecore.blockmodel.classify import Criteria, classify
@@ -169,6 +169,7 @@ def add_parsers(commands: Any) -> None:  # noqa: PLR0915 - argument tables
     s_vol.add_argument("--density", type=float, help="t/m3 to report tonnes")
     s_vol.add_argument("--sections-csv", help="write section areas and volumes")
     s_vol.add_argument("--grid-csv", help="write the thickness grid (needs --cell)")
+    cli_surfacetools.add_parsers(sf_cmds)
     s_flag = sf_cmds.add_parser("flag", help="write kaya=1 below the surface into a block model")
     s_flag.add_argument("project")
     s_flag.add_argument("surface")
@@ -1126,7 +1127,9 @@ def _write_sections_csv(path: Path, sec: volumes.SectionReport) -> None:
 
 def surface_command(args: argparse.Namespace, out: TextIO) -> int:
     with Project.open(args.project) as project:
-        if args.sf_command == "import":
+        if cli_surfacetools.run(project, args, out):
+            pass
+        elif args.sf_command == "import":
             _surface_import(project, args, out)
         elif args.sf_command == "clip":
             rings = [st.points for st in strings.load_strings(project, args.boundary) if st.closed]

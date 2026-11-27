@@ -376,6 +376,10 @@ class MainWindow(QMainWindow):
         action(surf, "Topoğrafya noktalarını içe aktar (x, y, z CSV)...", self.import_surface)
         action(surf, "Kuyu ağızlarından topoğrafya oluştur", self.surface_from_collars)
         action(surf, "Blok modelini topoğrafyayla kes (kaya/hava)...", self.flag_blocks)
+        action(surf, "Kontur üret (etiketli DXF)...", self.surface_contours)
+        action(surf, "Eğim ve bakı haritası...", self.surface_slope)
+        action(surf, "Profil çıkar (bir hat boyunca yüzeyler)...", self.surface_profile)
+        action(surf, "Yüzey kesişim çizgisi, yüzey öteleme...", self.surface_intersect)
         surf.addSeparator()
         action(surf, "Katı model (wireframe) içe aktar: OBJ, STL, DXF...", self.import_solid)
         action(surf, "Çizgileri içe aktar (DXF polyline, kesit yorumları)...", self.import_strings)
@@ -1401,6 +1405,26 @@ class MainWindow(QMainWindow):
         from minecore.gui.reserves import ReservesDialog  # noqa: PLC0415
 
         ReservesDialog(self._need_project(), self).exec()
+
+    def _surface_tools(self, tab: str) -> None:
+        from minecore.gui.surfacetools import SurfaceToolsDialog  # noqa: PLC0415
+
+        dialog = SurfaceToolsDialog(self._need_project(), self, tab)
+        dialog.exec()
+        if dialog.changed:
+            self.refresh()
+
+    def surface_contours(self) -> None:
+        self._surface_tools("contours")
+
+    def surface_slope(self) -> None:
+        self._surface_tools("slope")
+
+    def surface_profile(self) -> None:
+        self._surface_tools("profile")
+
+    def surface_intersect(self) -> None:
+        self._surface_tools("intersect")
 
     def survey(self) -> None:
         from minecore.gui.survey import SurveyDialog  # noqa: PLC0415
