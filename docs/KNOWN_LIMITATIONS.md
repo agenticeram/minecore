@@ -290,6 +290,18 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 - 2.5D DTMs only (one z per x, y): Delaunay in plan, linear interpolation;
   outside the hull the nearest point's elevation is used (counted, reported).
 - DTM import from x, y, z text files only; no DXF/string files, no breaklines.
+- Surface tools (OC10, E-CD-02 part; `minecore.surfacetools`, CLI `surface
+  contours|slope|profile|intersect|offset`, GUI Yüzey > Kontur / Eğim ve bakı /
+  Profil / Yüzey kesişim): contours, slope/aspect, profiles and intersection
+  lines are exact on the triangles. Not yet: contour smoothing (contours
+  follow the TIN facets), label placement that avoids overlaps (labels are
+  spaced along index contours only, DXF TEXT), upper/lower surface merge and
+  patching, offset along the surface normal (vertical offset only), surface
+  smoothing and decimation, grid <-> TIN conversion, coloured slope display
+  in the 3D view (slope comes as tables, CSV and ESRI ASCII rasters). A level
+  exactly equal to the highest vertex is traced along that vertex/edge; the
+  lowest level is not (a vertex on a level counts as above it).
+  Intersection of two 400k / 100k triangle surfaces takes about 6 s.
 
 ## Solids
 

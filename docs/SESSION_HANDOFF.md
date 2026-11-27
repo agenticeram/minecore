@@ -1,6 +1,6 @@
 # Session handoff
 
-Updated: 2026-11-18 (architect, thread "Add stockpile and month-end volumes").
+Updated: 2026-11-27 (architect, thread "Eksik bir özelliği tamamlayıp PR aç").
 Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 
 ## Owner direction (binding)
@@ -14,6 +14,24 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
+- 2026-11-27: surface tools, catalogue OC10 plus part of TP02 / E-CD-02
+  (`minecore.surfacetools`): exact TIN contours (chained, closed/open,
+  higher ground on the left, index contours, DXF TEXT labels along index
+  contours), slope and aspect per triangle with user class limits and
+  8-sector aspect table, plan and true area, ESRI ASCII grid rasters of z,
+  slope, aspect; profiles of several surfaces along a string (breakpoints at
+  every triangle edge, CSV, PNG/PDF/SVG with user vertical exaggeration);
+  intersection lines of two surfaces (pit design vs topography = daylight
+  line; overlay zero line, a above b on the left); vertical offset. CLI
+  `surface contours|slope|profile|intersect|offset`; GUI Yüzey menu four
+  entries, one tabbed dialog `gui/surfacetools.py`; command words KONTUR,
+  EGIM, PROFIL, KESISIM. `io.dxf.write_dxf` writes TEXT. Tests: pyramid
+  (perimeter 8R(1-L/H), slope atan(H/R), true area), planes, random TINs
+  (contour/intersection vertices on the surfaces, exact profile). The
+  catalogue file `09_olcme_cbs.txt` (owner's PC) could not be read this
+  session (device offline), so catalogue validation numbers for OC10 are
+  still to be checked against these tests. Next in E-CD-02: upper/lower
+  merge and patching, normal offset, smoothing/decimation, grid <-> TIN.
 - 2026-11-26: workbench command line (owner asked for an AutoCAD-style
   command bar inside the program, not a separate exe). Bottom dock
   `gui/command_line.py`: Turkish command words open the menu tools (unique

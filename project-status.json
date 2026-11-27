@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-19",
+  "updated": "2026-11-27",
   "current_milestone": "P1",
   "milestones": [
     {
@@ -25,7 +25,7 @@
       "id": "P1",
       "title": "Platform and CAD kernel",
       "status": "IN_PROGRESS",
-      "evidence": "Partial: strings editor, surfaces with breaklines/DXF, solid verify/repair/voxel boolean (from M3, M11)"
+      "evidence": "Partial: strings editor, surfaces with breaklines/DXF, solid verify/repair/voxel boolean (from M3, M11); surface tools: exact contours with index labels, slope/aspect classes and ESRI ASCII rasters, profiles, surface intersection lines, vertical offset (OC10, E-CD-02 part, 2026-11-27)"
     },
     {
       "id": "P2",

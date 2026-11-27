@@ -42,6 +42,12 @@ GUIDE = """
    modelse içe aktarırken açısını girin.
 2. **Yüzey > Topoğrafya**: noktalardan veya kuyu ağızlarından yüzey; **kaya/hava** ile
    bloklar işaretlenir.
+   **Yüzey > Kontur üret / Eğim ve bakı haritası / Profil çıkar / Yüzey kesişim
+   çizgisi**: üçgenler üzerinde tam kontur (ana konturlar etiketli DXF), eğim sınıfı ve
+   bakı alanları (sınıf sınırlarını siz girersiniz, .asc raster), bir çizgi boyunca
+   birden çok yüzeyin profili, iki yüzeyin kesiştiği çizgi (ör. ocak tasarımı ile
+   topoğrafya: tepe çizgisi) ve yüzeyi düşey öteleme. Komut satırında KONTUR, EGIM,
+   PROFIL, KESISIM.
 3. **Blok Modeli > Tenör kestirimi**: NN, IDW, sıradan kriging (OK) veya basit kriging
    (SK; ortalama bilinen kabul edilir, varsayılanı üst kesilmiş örneklerin ortalamasıdır).
    İsteğe bağlı domen katısı, yalnız kaya blokları ve üst kesme. Domenleri sırayla aynı

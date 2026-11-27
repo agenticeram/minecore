@@ -1,8 +1,10 @@
 # MineCore — resume file (devam dosyası)
 
-Updated: 2026-11-18. Repository state at this date: `main` includes
+Updated: 2026-11-27. Repository state at this date: `main` includes
 PR #60 (survey surfaces and volumes, catalogue OC06/OC07), CI green on Windows and Linux, tag `v0.1.0`.
-Branch work after it: stockpile volume and month-end survey (OC08/OC09); see
+Later work: stockpile volume and month-end survey (OC08/OC09), string tools
+(E-CD-01), command line and `minecore-cli.exe`, and (2026-11-27) surface
+tools: contours, slope/aspect, profiles, intersection lines (OC10); see
 `docs/SESSION_HANDOFF.md`.
 
 ## Sahibi için (Türkçe kısa özet)

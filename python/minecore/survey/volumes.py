@@ -193,11 +193,23 @@ def _boxes(poly: Floats, n: Ints) -> Floats:
 
 
 def _intersect(
-    poly: Floats, n: Ints, tri: Floats, chunk: int = 200_000
+    poly: Floats,
+    n: Ints,
+    tri: Floats,
+    chunk: int = 200_000,
+    z_ranges: tuple[Floats, Floats] | None = None,
 ) -> tuple[Floats, Ints, Ints, Ints]:
-    """Pieces of convex polygons inside triangles: (polygons, counts, poly id, tri id)."""
+    """Pieces of convex polygons inside triangles: (polygons, counts, poly id, tri id).
+
+    ``z_ranges``: optional (min, max) elevation per polygon and per triangle
+    (each k x 2); pairs whose ranges do not overlap are skipped.
+    """
     tb = np.column_stack([tri.min(axis=1), tri.max(axis=1)])
     ip, it = _candidate_pairs(_boxes(poly, n), tb)
+    if z_ranges is not None:
+        zp, zt = z_ranges
+        overlap = (zp[ip, 0] <= zt[it, 1]) & (zt[it, 0] <= zp[ip, 1])
+        ip, it = ip[overlap], it[overlap]
     parts_p, parts_n, parts_ip, parts_it = [], [], [], []
     for s in range(0, len(ip), chunk):
         a, b = ip[s : s + chunk], it[s : s + chunk]
