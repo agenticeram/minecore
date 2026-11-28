@@ -25,7 +25,7 @@ def qapp() -> QApplication:
     return app
 
 
-def test_surface_tools_dialog(qapp: QApplication, tmp_path: Path) -> None:
+def test_surface_tools_dialog(qapp: QApplication, tmp_path: Path) -> None:  # noqa: PLR0915
     pyramid = np.array([[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0], [50, 50, 20]], float)
     flat = np.array([[0, 0, 10], [100, 0, 10], [100, 100, 10], [0, 100, 10]], float)
     with Project.create(tmp_path / "y.mcproj", "y") as project:
@@ -68,3 +68,21 @@ def test_surface_tools_dialog(qapp: QApplication, tmp_path: Path) -> None:
         d.offset()
         assert load_surface(project, "topo_alt").points[:, 2].max() == pytest.approx(8.5)
         assert d.changed
+        # Merge, normal offset, smoothing, decimation, grid.
+        d.m_a.setCurrentText("pit")
+        d.m_b.setCurrentText("topo")
+        d.m_mode.setCurrentIndex(1)  # upper
+        d.m_name.setText("ust")
+        d.merge()
+        assert load_surface(project, "ust").points[:, 2].min() == pytest.approx(10.0)
+        d.e_surface.setCurrentText("ust")
+        for slot, name in ((d.normal_offset, "n"), (d.smooth, "s"), (d.decimate, "t")):
+            d.e_name.setText(name)
+            slot()
+            assert name in d.e_result.text()
+        d.to_grid(str(tmp_path / "u.asc"))
+        d.e_name.setText("g")
+        d.from_grid(str(tmp_path / "u.asc"))
+        assert len(load_surface(project, "g").points) > 3
+        d2 = SurfaceToolsDialog(project, parent, "edit")
+        assert d2.tabs.currentIndex() == 4

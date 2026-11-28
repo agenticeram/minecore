@@ -295,13 +295,35 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
   Profil / Yüzey kesişim): contours, slope/aspect, profiles and intersection
   lines are exact on the triangles. Not yet: contour smoothing (contours
   follow the TIN facets), label placement that avoids overlaps (labels are
-  spaced along index contours only, DXF TEXT), upper/lower surface merge and
-  patching, offset along the surface normal (vertical offset only), surface
-  smoothing and decimation, grid <-> TIN conversion, coloured slope display
+  spaced along index contours only, DXF TEXT), coloured slope display
   in the 3D view (slope comes as tables, CSV and ESRI ASCII rasters). A level
   exactly equal to the highest vertex is traced along that vertex/edge; the
   lowest level is not (a vertex on a level counts as above it).
   Intersection of two 400k / 100k triangle surfaces takes about 6 s.
+- Surface editing (E-CD-02, `minecore.surfaceedit`, CLI `surface
+  merge|normal-offset|smooth|decimate|from-grid|to-grid`, GUI Yüzey > Yüzey
+  birleştir / yama, command YBIRLESTIR, 2026-11-28):
+  - Merge/patch is exact on the triangles up to the vertex merge tolerance
+    (random-TIN test: < 1e-6 m at 1e-5 m tolerance). Where one surface ends
+    above the other (a step at its edge) a TIN cannot hold a vertical wall:
+    the step is bridged by the triangles just outside that edge. Breakline
+    pieces shorter than 4 x tolerance that meet at very small angles are left
+    unconstrained (count in `SurfaceReport.short_pieces_left`). Two 20k-point
+    surfaces merge in about 12 s; the constrained triangulation is a
+    conforming Delaunay in Python (no CDT library), so very large surfaces
+    are slow.
+  - Normal offset moves each vertex to the least-squares point of its moved
+    face planes (exact for planes, ridges, troughs, symmetric apexes); at
+    irregular vertices the offset is approximate (capped at 3 x distance by
+    default). Concave areas tighter than the distance fold and are refused
+    rather than trimmed (no self-intersection removal yet).
+  - Smoothing changes elevations only (local least-squares plane, planes stay
+    exact); no breakline-aware smoothing, no plan smoothing.
+  - Decimation guarantees the tolerance at the original vertices; between
+    them (where an original and a new edge cross) the deviation is not
+    checked. Boundary vertices are all kept (no boundary simplification).
+  - Grids: ESRI ASCII only (no GeoTIFF yet). No-data cells become holes via a
+    longest-edge limit of one cell diagonal.
 
 ## Solids
 

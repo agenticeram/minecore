@@ -1,6 +1,6 @@
 # Session handoff
 
-Updated: 2026-11-27 (architect, thread "Eksik bir özelliği tamamlayıp PR aç").
+Updated: 2026-11-28 (architect, thread "Yüzey araçlarını tamamla").
 Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 
 ## Owner direction (binding)
@@ -14,6 +14,27 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
+- 2026-11-28: surface editing completes E-CD-02 (`minecore.surfaceedit`).
+  `merge_surfaces` upper/lower envelope or patch (a over b): plan
+  arrangement of both TINs (edge crossings, swap points, intersection lines,
+  footprint edges) fed to `build_surface` as breaklines, only the pieces of
+  the surface that forms the result (consecutive pieces joined), so the
+  result is exact on every arrangement face; trimmed to the union footprint
+  with rings from the kept triangles (`boundary_rings`). `normal_offset`
+  (least-squares meeting point of the moved face planes, fold check),
+  `smooth_surface` (z only, towards the neighbour LS plane, user change cap,
+  boundary held), `decimate_surface` (greedy insertion to a vertical
+  tolerance), `read_ascii_grid` / `grid_surface` (no-data = holes). CLI
+  `surface merge|normal-offset|smooth|decimate|from-grid|to-grid`; GUI
+  Yüzey > "Yüzey birleştir / yama ..." = new tab "Birleştir / düzenle";
+  command YBIRLESTIR. `surfaces.build_surface(tolerate_small_angles=True)`
+  leaves tiny unresolvable breakline pieces unconstrained instead of failing;
+  `_segment_crossings` now uses a box grid (was quadratic memory with long
+  hull edges: OOM at 5k points). Tests `tests/python/survey/test_surfaceedit.py`
+  (pyramid pit 83.333 m3, random-TIN envelopes, plane/trough offsets, plane
+  smoothing, decimation tolerance, grid round trip, CLI) and the dialog test.
+  Next in P1: exact solid booleans and plane sections (E-CD-03), or plan
+  sheets (E-CD-05).
 - 2026-11-27: surface tools, catalogue OC10 plus part of TP02 / E-CD-02
   (`minecore.surfacetools`): exact TIN contours (chained, closed/open,
   higher ground on the left, index contours, DXF TEXT labels along index

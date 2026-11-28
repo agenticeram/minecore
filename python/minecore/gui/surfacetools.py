@@ -1,4 +1,5 @@
-"""Surface tools dialog: contours, slope/aspect, profile, intersection, offset."""
+"""Surface tools dialog: contours, slope/aspect, profile, intersection, offset,
+merge/patch, normal offset, smoothing, decimation, grid <-> TIN."""
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -27,12 +29,18 @@ from PySide6.QtWidgets import (
 )
 
 from minecore import cli_surfacetools, strings, surfaces
+from minecore import surfaceedit as se
 from minecore import surfacetools as st
 from minecore.gui.layout import fit_to_screen
 from minecore.gui.resource import _row, _spin
 from minecore.project import Project
 
-TABS = ("contours", "slope", "profile", "intersect")
+TABS = ("contours", "slope", "profile", "intersect", "edit")
+MERGE_MODES = {
+    "Alt zarf (düşük olan; ör. ocak tasarımı + topoğrafya)": "lower",
+    "Üst zarf (yüksek olan; ör. döküm sahası + topoğrafya)": "upper",
+    "Yama (A olduğu yerde A, başka yerde B)": "patch",
+}
 CLASS_HEADERS = ["Sınıf", "Plan alanı m²", "Gerçek alan m²", "Pay %"]
 
 
@@ -53,7 +61,7 @@ def _class_rows(rows: list[st.ClassRow]) -> list[list[str]]:
 class SurfaceToolsDialog(QDialog):
     def __init__(self, project: Project, parent: QWidget, tab: str = "contours") -> None:
         super().__init__(parent)
-        self.setWindowTitle("Yüzey araçları: kontur, eğim/bakı, profil, kesişim")
+        self.setWindowTitle("Yüzey araçları: kontur, eğim/bakı, profil, kesişim, birleştirme")
         fit_to_screen(self, 1050, 700)
         self.project = project
         self.changed = False
@@ -63,6 +71,7 @@ class SurfaceToolsDialog(QDialog):
         self.tabs.addTab(self._slope_tab(), "Eğim / bakı")
         self.tabs.addTab(self._profile_tab(), "Profil")
         self.tabs.addTab(self._intersect_tab(), "Kesişim ve öteleme")
+        self.tabs.addTab(self._edit_tab(), "Birleştir / düzenle")
         self.tabs.setCurrentIndex(TABS.index(tab))
 
     def _guard(self, slot: Callable[[], None]) -> Callable[[], None]:
@@ -329,3 +338,166 @@ class SurfaceToolsDialog(QDialog):
         surfaces.save_surface(self.project, name, s)
         self.changed = True
         self.i_result.setText(f"'{name}': {src} {self.o_dz.value():+g} m ötelendi.")
+
+    # -- merge, normal offset, smoothing, decimation, grid ------------------------------
+
+    def _edit_tab(self) -> QWidget:  # noqa: PLR0915 - one form per tool
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        merge = QFormLayout()
+        lay.addLayout(merge)
+        self.m_a = self._surface_box()
+        self.m_b = self._surface_box()
+        if self.m_b.count() > 1:
+            self.m_b.setCurrentIndex(1)
+        self.m_mode = QComboBox()
+        self.m_mode.addItems(list(MERGE_MODES))
+        self.m_name = QLineEdit("")
+        self.m_name.setPlaceholderText("yeni yüzey adı")
+        merge.addRow("Yüzey A", self.m_a)
+        merge.addRow("Yüzey B", self.m_b)
+        merge.addRow("Birleştirme", self.m_mode)
+        merge.addRow("Yeni yüzey adı", self.m_name)
+        go = QPushButton("Yüzeyleri birleştir ve kaydet")
+        go.clicked.connect(self._guard(self.merge))
+        lay.addWidget(go)
+        edit = QFormLayout()
+        lay.addLayout(edit)
+        self.e_surface = self._surface_box()
+        self.e_name = QLineEdit("")
+        self.e_name.setPlaceholderText("yeni yüzey adı")
+        self.e_distance = _spin(1.0, -1e4, 1e4, 0.5, 3)
+        self.e_passes = QSpinBox(minimum=1, maximum=100, value=3)
+        self.e_factor = _spin(0.5, 0.05, 1.0, 0.05, 2)
+        self.e_limit = _spin(0.0, 0.0, 1e4, 0.05, 3)
+        self.e_limit.setSpecialValueText("sınır yok")
+        self.e_hold = QCheckBox("Sınır noktaları sabit kalsın")
+        self.e_hold.setChecked(True)
+        self.e_tol = _spin(0.05, 0.0, 1e3, 0.01, 3)
+        edit.addRow("Yüzey", self.e_surface)
+        edit.addRow("Yeni yüzey adı", self.e_name)
+        edit.addRow("Normal öteleme mesafesi (m, + yukarı)", self.e_distance)
+        edit.addRow("Yumuşatma geçişi / oranı", _row(self.e_passes, self.e_factor))
+        edit.addRow("Bir noktada en çok değişim (m)", self.e_limit)
+        edit.addRow("", self.e_hold)
+        edit.addRow("İnceltme düşey toleransı (m)", self.e_tol)
+        for text, slot in (
+            ("Normal yönünde ötele", self.normal_offset),
+            ("Yumuşat", self.smooth),
+            ("İncelt (nokta azalt)", self.decimate),
+        ):
+            b = QPushButton(text)
+            b.clicked.connect(self._guard(slot))
+            lay.addWidget(b)
+        grid = QFormLayout()
+        lay.addLayout(grid)
+        self.g_cell = _spin(5.0, 0.01, 1e4, 1.0, 2)
+        grid.addRow("Izgara hücresi (m), yüzey yukarıdaki", self.g_cell)
+        imp = QPushButton("ESRI ASCII ızgaradan (.asc) yüzey oluştur (tolerans: inceltme)...")
+        imp.clicked.connect(self._guard(self.from_grid))
+        exp = QPushButton("Yüzeyi ESRI ASCII ızgara (.asc) olarak dışa aktar...")
+        exp.clicked.connect(self._guard(self.to_grid))
+        lay.addWidget(imp)
+        lay.addWidget(exp)
+        self.e_result = QLabel("")
+        self.e_result.setWordWrap(True)
+        lay.addWidget(self.e_result)
+        lay.addStretch(1)
+        return w
+
+    def _new_name(self, box: QLineEdit) -> str:
+        name = box.text().strip()
+        if not name:
+            raise ValueError("Yeni yüzey adını yazın.")
+        return name
+
+    def _store(self, name: str, surface: surfaces.Surface, text: str) -> None:
+        surfaces.save_surface(self.project, name, surface)
+        self.changed = True
+        for box in (self.m_a, self.m_b, self.e_surface, self.o_surface, self.i_a, self.i_b):
+            if box.findText(name) < 0:
+                box.addItem(name)
+        self.e_result.setText(text)
+
+    def merge(self) -> None:
+        name = self._new_name(self.m_name)
+        a_name, b_name = self.m_a.currentText(), self.m_b.currentText()
+        mode = MERGE_MODES[self.m_mode.currentText()]
+        s, r = se.merge_surfaces(
+            surfaces.load_surface(self.project, a_name),
+            surfaces.load_surface(self.project, b_name),
+            mode,
+        )
+        self._store(
+            name,
+            s,
+            f"'{name}': {r.triangles} üçgen. İkisinin olduğu alan {r.area_both:,.1f} m² "
+            f"({a_name}: {r.area_from_a:,.1f}, {b_name}: {r.area_from_b:,.1f}); yalnız {a_name} "
+            f"{r.area_a_only:,.1f} m², yalnız {b_name} {r.area_b_only:,.1f} m².",
+        )
+
+    def normal_offset(self) -> None:
+        name = self._new_name(self.e_name)
+        src = self.e_surface.currentText()
+        s, r = se.normal_offset(surfaces.load_surface(self.project, src), self.e_distance.value())
+        self._store(
+            name,
+            s,
+            f"'{name}': {src} normal yönünde {r.distance:+g} m ötelendi; en büyük nokta "
+            f"hareketi {r.max_move:.3f} m, sınıra takılan {r.limited} nokta.",
+        )
+
+    def smooth(self) -> None:
+        name = self._new_name(self.e_name)
+        src = self.e_surface.currentText()
+        limit = self.e_limit.value() or None
+        s, r = se.smooth_surface(
+            surfaces.load_surface(self.project, src),
+            self.e_passes.value(),
+            self.e_factor.value(),
+            max_change=limit,
+            hold_boundary=self.e_hold.isChecked(),
+        )
+        self._store(
+            name,
+            s,
+            f"'{name}': {r.iterations} geçiş; değişim en çok {r.max_change:.3f} m, ortalama "
+            f"{r.mean_change:.3f} m; hacim farkı {r.volume_change:+,.1f} m³; sınıra takılan "
+            f"{r.limited} nokta.",
+        )
+
+    def decimate(self) -> None:
+        name = self._new_name(self.e_name)
+        src = self.e_surface.currentText()
+        s, r = se.decimate_surface(surfaces.load_surface(self.project, src), self.e_tol.value())
+        self._store(
+            name,
+            s,
+            f"'{name}': {r.points_before} noktadan {r.points_after} noktaya, {r.triangles} "
+            f"üçgen; en büyük düşey hata {r.max_error:.4f} m (tolerans {r.tolerance:g} m).",
+        )
+
+    def from_grid(self, path: str = "") -> None:
+        name = self._new_name(self.e_name)
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "ASCII ızgara", "", "ESRI ASCII (*.asc)")
+        if not path:
+            return
+        g = se.read_ascii_grid(Path(path))
+        tol = self.e_tol.value() or None
+        s, n = se.grid_surface(g, tol)
+        self._store(
+            name,
+            s,
+            f"'{name}': {g.z.shape[1]} x {g.z.shape[0]} ızgara ({g.cell:g} m), veri olan {n} "
+            f"hücre; {len(s.points)} nokta, {len(s.triangles())} üçgen.",
+        )
+
+    def to_grid(self, path: str = "") -> None:
+        path = path or self._save_path("ASCII ızgara", "ESRI ASCII (*.asc)")
+        if not path:
+            return
+        src = self.e_surface.currentText()
+        g = st.surface_grid(surfaces.load_surface(self.project, src), self.g_cell.value())
+        st.write_ascii_grid(Path(path), g, g.z)
+        self.e_result.setText(f"{path}: {g.z.shape[1]} x {g.z.shape[0]} hücre, {g.cell:g} m.")

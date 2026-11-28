@@ -48,6 +48,11 @@ GUIDE = """
    birden çok yüzeyin profili, iki yüzeyin kesiştiği çizgi (ör. ocak tasarımı ile
    topoğrafya: tepe çizgisi) ve yüzeyi düşey öteleme. Komut satırında KONTUR, EGIM,
    PROFIL, KESISIM.
+   **Yüzey > Yüzey birleştir / yama ...** (komut YBIRLESTIR): iki yüzeyin alt zarfı (ör.
+   ocak tasarımı + topoğrafya = nihai yüzey), üst zarfı veya yaması (tam, yeniden
+   örnekleme yok); normal yönünde öteleme; yumuşatma (düzlem bozulmaz, en çok değişimi
+   siz sınırlarsınız); inceltme (her nokta sizin düşey toleransınız içinde kalır);
+   ESRI ASCII ızgaradan yüzey ve yüzeyden ızgara.
 3. **Blok Modeli > Tenör kestirimi**: NN, IDW, sıradan kriging (OK) veya basit kriging
    (SK; ortalama bilinen kabul edilir, varsayılanı üst kesilmiş örneklerin ortalamasıdır).
    İsteğe bağlı domen katısı, yalnız kaya blokları ve üst kesme. Domenleri sırayla aynı
