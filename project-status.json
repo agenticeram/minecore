@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-27",
+  "updated": "2026-11-28",
   "current_milestone": "P1",
   "milestones": [
     {
@@ -25,7 +25,7 @@
       "id": "P1",
       "title": "Platform and CAD kernel",
       "status": "IN_PROGRESS",
-      "evidence": "Partial: strings editor, surfaces with breaklines/DXF, solid verify/repair/voxel boolean (from M3, M11); surface tools: exact contours with index labels, slope/aspect classes and ESRI ASCII rasters, profiles, surface intersection lines, vertical offset (OC10, E-CD-02 part, 2026-11-27); surface merge (upper/lower envelope, patch), normal offset, smoothing, decimation, ESRI ASCII grid <-> TIN (E-CD-02 complete, 2026-11-28)"
+      "evidence": "Partial: strings editor, surfaces with breaklines/DXF, solid verify/repair (from M3, M11); surface tools: exact contours with index labels, slope/aspect classes and ESRI ASCII rasters, profiles, surface intersection lines, vertical offset (OC10, E-CD-02 part, 2026-11-27); surface merge (upper/lower envelope, patch), normal offset, smoothing, decimation, ESRI ASCII grid <-> TIN (E-CD-02 complete, 2026-11-28); exact solid booleans (Manifold kernel, ADR-0012), plane cut with section outline, exact surface cut, volume/area/centroid; analytic cube/sphere-lens/nested tests, 1M-triangle boolean about 2 s (E-CD-03, 2026-11-28)"
     },
     {
       "id": "P2",

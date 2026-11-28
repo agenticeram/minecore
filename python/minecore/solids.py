@@ -56,7 +56,9 @@ class Solid:
 
     def volume(self) -> float:
         """Signed-volume sum (divergence theorem); absolute value for closed solids."""
-        a, b, c = (self.vertices[self.triangles[:, i]] for i in range(3))
+        # Local frame: mine-grid coordinates would cancel badly in the triple products.
+        local = self.vertices - self.vertices.min(axis=0)
+        a, b, c = (local[self.triangles[:, i]] for i in range(3))
         return float(abs(np.einsum("ij,ij->i", a, np.cross(b, c)).sum()) / 6.0)
 
     def inside(self, points: Floats) -> npt.NDArray[np.bool_]:

@@ -455,12 +455,21 @@ What MineCore cannot do yet, and what each gap depends on. Updated every session
 
 ## Solid tools
 
-- `solidtools` (GUI "Katı model araçları", CLI `solid verify|boolean|cut`):
-  verification and repair (vertex merge, degenerate/duplicate removal,
-  consistent outward orientation; holes are reported, not filled; no
-  self-intersection test). Booleans and surface cuts are voxel-based: the
-  result is closed but rounded at the voxel size, and slow for fine voxels
-  on large solids (pure-Python inside test). Lightly tested.
+- `solidtools` (GUI Yüzey menu "Katı doğrula...", "Katı Boolean...", "Katıyı
+  yüzeyle kes...", "Katıyı düzlemle kes..."; CLI `solid verify|boolean|join|
+  cut|plane-cut|properties`): booleans and cuts are exact on the triangles
+  (Manifold kernel, ADR-0012). Inputs must be closed and consistently
+  oriented; problems are reported, repair merges vertices, drops bad
+  triangles and orients shells (holes are not filled; no self-intersection
+  test or removal: a self-intersecting input gives an undefined result).
+  The tolerance can merge features finer than it (volume change at most
+  tolerance x area); use 0 for no simplification. Shells thinner on average
+  than the tolerance (touching solids) are dropped from results. Surface
+  cuts keep only the part inside the surface footprint (the rest is
+  reported as "outside"); a surface outline with pinched corners (two
+  triangles meeting at one point) may be refused by the kernel. No solid
+  slicing into many parallel sections in one step yet, no solid from
+  surfaces "between two surfaces" tool yet.
 
 ## Haul roads
 
