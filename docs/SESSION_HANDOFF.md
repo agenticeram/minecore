@@ -1,6 +1,6 @@
 # Session handoff
 
-Updated: 2026-11-28 (architect, thread "Yüzey araçlarını tamamla").
+Updated: 2026-11-28 (architect, thread "Katılarda kesin Boolean ekle").
 Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 
 ## Owner direction (binding)
@@ -14,6 +14,34 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
 - Open-source libraries welcome if permissive (MIT/BSD/Apache); no GPL.
 
 ## State
+- 2026-11-28 (later): exact solid booleans, E-CD-03 (ADR-0012). Kernel:
+  Manifold (`manifold3d`, Apache-2.0, double precision `Mesh64`), used only
+  from `minecore.solidtools`: `boolean` (union/intersection/difference),
+  `union_all`, `cut_by_plane` (both closed halves, section rings from the
+  cut caps, section area; `plane_normal(dip, dip_direction)`),
+  `cut_by_surface` (surface TIN extruded to closed prisms below/above, so
+  the cut follows the TIN exactly; volume outside the footprint reported),
+  `properties` (volume, area, centroid by divergence theorem in a local
+  frame, box, signed shell volumes). Inputs are checked
+  (`input_problems`: open, non-manifold, duplicate, flipped, inward) with
+  an optional repair; tolerance is a user input (default 1 mm shown in CLI
+  and GUI, 0 = no simplification); zero-thickness shells from touching
+  solids are dropped. `repair` now merges vertices with a KD-tree within
+  the tolerance and keeps cavities inward (nesting depth), was turning
+  voids into filled shells. `verify`/`Solid.volume` work in a local frame
+  (UTM triple products cancelled) and use integer edge keys (verify of 1M
+  triangles 7 s -> 0.6 s). Voxel booleans/cuts removed. CLI `solid
+  boolean|join|cut|plane-cut|properties` (`--tolerance`, `--repair`); GUI
+  Yüzey menu four entries opening the tabbed "Katı model araçları"; command
+  words KATIARAC, KATIBOOL, KATIYKES, KATIDKES. Tests
+  `tests/python/test_solidtools.py` (cubes, coplanar/touching/flush faces,
+  nested cavity, icosphere lens formula, hypothesis boxes, plane and tilted
+  surface cuts, CLI) and the dialog test. Benchmark
+  `tools/bench_solid_boolean.py`: two 500k-triangle spheres at mine-grid
+  coordinates, each op about 2 s here (Linux container), inclusion-exclusion
+  error 4e-4 m3 on 7e6 m3. P1 exit "booleans of cubes, spheres, nested
+  solids; 1M-triangle boolean timed" is met. Next in P1: 3D view (E-CD-04)
+  or plan sheets (E-CD-05).
 - 2026-11-28: surface editing completes E-CD-02 (`minecore.surfaceedit`).
   `merge_surfaces` upper/lower envelope or patch (a over b): plan
   arrangement of both TINs (edge crossings, swap points, intersection lines,
@@ -142,7 +170,7 @@ Resume file for a fresh session: `docs/RESUME_PROMPT.md`.
   plan string editor (`gui/strings_editor.py`); pit design from toe strings
   (`benchdesign.design_from_toes`, `pit design-toes`); grade control dig
   lines (`minecore.gradecontrol`, CLI `gc`); dump sequencing by haul distance
-  feeding the fleet; solid verify/repair/voxel booleans/cut
+  feeding the fleet; solid verify/repair/voxel booleans/cut (voxel replaced by exact, 2026-11-28)
   (`minecore.solidtools`); connector ramps from side pit bottoms, road edge
   and safety bund strings. Owner asked (14:25 UTC) to delegate simple work
   to Haiku subagents and verify it.

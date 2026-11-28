@@ -95,8 +95,19 @@ from minecore.pitopt.width import apply_mining_width
 from minecore.plots import SectionSpec, section_plot
 from minecore.project import Project
 from minecore.reserves import bench_reserves, between_fraction
-from minecore.solids import flag_blocks, load_solid, read_solid, save_solid
-from minecore.solidtools import Boolean, boolean, cut_by_surface, repair, verify
+from minecore.solids import Solid, SolidError, flag_blocks, load_solid, read_solid, save_solid
+from minecore.solidtools import (
+    DEFAULT_TOLERANCE,
+    Boolean,
+    boolean,
+    cut_by_plane,
+    cut_by_surface,
+    plane_normal,
+    repair,
+    union_all,
+    verify,
+)
+from minecore.solidtools import properties as solid_properties
 from minecore.survey import volumes
 from minecore.underground.development import DeclineDesign, development_from_model
 from minecore.underground.devschedule import DevRates, schedule_development
@@ -196,20 +207,45 @@ def add_parsers(commands: Any) -> None:  # noqa: PLR0915 - argument tables
     so_ver.add_argument("project")
     so_ver.add_argument("solid")
     so_ver.add_argument("--repair", metavar="NAME", help="store the repaired solid as NAME")
-    so_bool = sol_cmds.add_parser("boolean", help="union, intersection or difference (voxel)")
+    so_bool = sol_cmds.add_parser("boolean", help="exact union, intersection or difference")
     so_bool.add_argument("project")
     so_bool.add_argument("a")
     so_bool.add_argument("op", choices=[b.value for b in Boolean])
     so_bool.add_argument("b")
     so_bool.add_argument("name", help="result solid name")
-    so_bool.add_argument("--voxel", type=float, default=1.0, help="voxel size, m")
-    so_cut = sol_cmds.add_parser("cut", help="part of a solid below/above a surface (voxel)")
+    _exact_options(so_bool)
+    so_join = sol_cmds.add_parser("join", help="exact union of several solids")
+    so_join.add_argument("project")
+    so_join.add_argument("name", help="result solid name")
+    so_join.add_argument("solids", nargs="+", help="solids to join")
+    _exact_options(so_join)
+    so_cut = sol_cmds.add_parser("cut", help="exact part of a solid below/above a surface")
     so_cut.add_argument("project")
     so_cut.add_argument("solid")
     so_cut.add_argument("surface")
     so_cut.add_argument("name", help="result solid name")
     so_cut.add_argument("--above", action="store_true", help="keep the part above")
-    so_cut.add_argument("--voxel", type=float, default=1.0, help="voxel size, m")
+    so_cut.add_argument("--other", metavar="NAME", help="also store the other part as NAME")
+    _exact_options(so_cut)
+    so_plane = sol_cmds.add_parser(
+        "plane-cut", help="exact cut by a plane: both halves and the section outline"
+    )
+    so_plane.add_argument("project")
+    so_plane.add_argument("solid")
+    so_plane.add_argument("--point", nargs=3, type=float, required=True, metavar=("X", "Y", "Z"))
+    orient = so_plane.add_mutually_exclusive_group(required=True)
+    orient.add_argument(
+        "--dip", nargs=2, type=float, metavar=("DIP", "DIPDIR"), help="dip and dip direction, deg"
+    )
+    orient.add_argument("--normal", nargs=3, type=float, metavar=("NX", "NY", "NZ"))
+    so_plane.add_argument("--upper", metavar="NAME", help="store the half the normal points to")
+    so_plane.add_argument("--lower", metavar="NAME", help="store the other half")
+    so_plane.add_argument("--section", metavar="NAME", help="store the outline as a string set")
+    _exact_options(so_plane)
+    so_prop = sol_cmds.add_parser("properties", help="volume, area, centroid, box, shells")
+    so_prop.add_argument("project")
+    so_prop.add_argument("solids", nargs="+")
+    so_prop.add_argument("--density", type=float, help="t/m3: also report tonnes")
     so_flag = sol_cmds.add_parser("flag", help="dom_<solid> (and _pct fractions) in a model")
     so_flag.add_argument("project")
     so_flag.add_argument("solid")
@@ -720,6 +756,18 @@ def strings_command(args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _exact_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=DEFAULT_TOLERANCE,
+        help=f"m: vertex merge and kernel tolerance (default {DEFAULT_TOLERANCE})",
+    )
+    parser.add_argument(
+        "--repair", action="store_true", help="repair the inputs first (merge, orient)"
+    )
+
+
 def solid_command(args: argparse.Namespace, out: TextIO) -> int:
     with Project.open(args.project) as project:
         if args.solid_command == "import":
@@ -730,7 +778,7 @@ def solid_command(args: argparse.Namespace, out: TextIO) -> int:
                 f"{solid.volume():,.0f} m3, open edges {solid.open_edges()}\n"
             )
             return 0
-        if args.solid_command in ("verify", "boolean", "cut"):
+        if args.solid_command in ("verify", "boolean", "cut", "join", "plane-cut", "properties"):
             return _solid_tools(project, args, out)
         model = BlockModel.open(project, args.model)
         attribute = f"dom_{args.solid}"
@@ -758,21 +806,96 @@ def _solid_tools(project: Project, args: argparse.Namespace, out: TextIO) -> int
             f = verify(fixed)
             out.write(f"{args.repair}: volume {f.volume:,.0f} m3, open edges {f.open_edges}\n")
         return 0
-    if args.solid_command == "boolean":
-        result = boolean(
-            load_solid(project, args.a), load_solid(project, args.b), Boolean(args.op), args.voxel
-        )
-    else:
-        result = cut_by_surface(
+    if args.solid_command == "properties":
+        return _solid_properties(project, args, out)
+    if args.solid_command == "plane-cut":
+        return _plane_cut(project, args, out)
+    if args.solid_command == "cut":
+        cut = cut_by_surface(
             load_solid(project, args.solid),
             surfaces.load_surface(project, args.surface),
-            not args.above,
-            args.voxel,
+            args.tolerance,
+            repair_input=args.repair,
         )
-    save_solid(project, args.name, result)
+        keep, other = (cut.above, cut.below) if args.above else (cut.below, cut.above)
+        if keep is None:
+            raise SolidError("nothing of the solid is on that side of the surface")
+        _store_solid(project, args.name, keep, out)
+        if args.other:
+            if other is None:
+                out.write(f"{args.other}: not stored, the other side is empty\n")
+            else:
+                _store_solid(project, args.other, other, out)
+        out.write(
+            f"below {cut.volume_below:,.3f} m3, above {cut.volume_above:,.3f} m3, "
+            f"outside the surface footprint {cut.volume_outside:,.3f} m3\n"
+        )
+        return 0
+    if args.solid_command == "join":
+        result = union_all(
+            [load_solid(project, n) for n in args.solids], args.tolerance, repair_inputs=args.repair
+        )
+    else:
+        result = boolean(
+            load_solid(project, args.a),
+            load_solid(project, args.b),
+            Boolean(args.op),
+            args.tolerance,
+            repair_inputs=args.repair,
+        )
+    _store_solid(project, args.name, result, out)
+    return 0
+
+
+def _store_solid(project: Project, name: str, solid: Solid, out: TextIO) -> None:
+    save_solid(project, name, solid)
+    p = solid_properties(solid)
     out.write(
-        f"{args.name}: {len(result.triangles):,} triangles, volume {result.volume():,.0f} m3\n"
+        f"{name}: {len(solid.triangles):,} triangles, {len(p.shell_volumes)} shells, "
+        f"volume {p.volume:,.3f} m3, area {p.area:,.3f} m2\n"
     )
+
+
+def _plane_cut(project: Project, args: argparse.Namespace, out: TextIO) -> int:
+    normal = plane_normal(*args.dip) if args.dip else np.asarray(args.normal, np.float64)
+    cut = cut_by_plane(
+        load_solid(project, args.solid),
+        np.asarray(args.point, np.float64),
+        normal,
+        args.tolerance,
+        repair_input=args.repair,
+    )
+    out.write(
+        f"upper {cut.volume_upper:,.3f} m3, lower {cut.volume_lower:,.3f} m3, section "
+        f"{cut.section_area:,.3f} m2 in {len(cut.section)} rings\n"
+    )
+    for name, piece in ((args.upper, cut.upper), (args.lower, cut.lower)):
+        if name and piece is not None:
+            _store_solid(project, name, piece, out)
+        elif name:
+            out.write(f"{name}: not stored, that side is empty\n")
+    if args.section and cut.section:
+        strings.save_strings(
+            project, args.section, [strings.String(r, closed=True) for r in cut.section]
+        )
+        out.write(f"{args.section}: {len(cut.section)} section rings\n")
+    return 0
+
+
+def _solid_properties(project: Project, args: argparse.Namespace, out: TextIO) -> int:
+    out.write(
+        "solid,triangles,shells,closed,volume_m3,area_m2,cx,cy,cz,xmin,ymin,zmin,xmax,ymax,zmax"
+    )
+    out.write(",tonnes\n" if args.density else "\n")
+    for name in args.solids:
+        s = load_solid(project, name)
+        p = solid_properties(s)
+        row = [name, f"{len(s.triangles)}", f"{len(p.shell_volumes)}", "yes" if p.closed else "no"]
+        row += [f"{p.volume:.3f}", f"{p.area:.3f}"]
+        row += [f"{v:.3f}" for v in (*p.centroid, *p.lower, *p.upper)]
+        if args.density:
+            row.append(f"{p.volume * args.density:.3f}")
+        out.write(",".join(row) + "\n")
     return 0
 
 

@@ -6,7 +6,8 @@ Later work: stockpile volume and month-end survey (OC08/OC09), string tools
 (E-CD-01), command line and `minecore-cli.exe`, and (2026-11-27) surface
 tools: contours, slope/aspect, profiles, intersection lines (OC10), and
 (2026-11-28) surface merge/patch, normal offset, smoothing, decimation,
-grid <-> TIN (E-CD-02 complete); see `docs/SESSION_HANDOFF.md`.
+grid <-> TIN (E-CD-02 complete), and exact solid booleans, plane/surface
+cuts and solid properties (E-CD-03, ADR-0012); see `docs/SESSION_HANDOFF.md`.
 
 ## Sahibi için (Türkçe kısa özet)
 
@@ -79,7 +80,7 @@ then Micromine, Deswik, Surpac, Vulcan. Never a toy, never "AI slop".
   package, operation log/undo), M2 drillholes (import, Turkish validation
   report, min-curvature desurvey, compositing, 3D view) — DONE.
 - M3–M11 IN PROGRESS with large parts working: DTM surfaces, solids
-  (import/export, verify/repair, voxel booleans), strings and section
+  (import/export, verify/repair, exact booleans and cuts), strings and section
   linking, regular and rotated block models, re-blocking, calculator;
   variograms, NN/IDW/OK/SK kriging in Rust with multi-pass search,
   slope of regression and kriging efficiency, swath, cross-validation;
