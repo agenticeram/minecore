@@ -8,6 +8,12 @@
         --plot profil.png --exaggeration 2
     minecore surface intersect P.mcproj PIT TOPO --save tepe_cizgisi
     minecore surface offset P.mcproj TOPO --dz -0.5 --save topo_eksi50cm
+    minecore surface merge P.mcproj PIT TOPO --mode lower --save nihai
+    minecore surface normal-offset P.mcproj PIT --distance 2 --save astar
+    minecore surface smooth P.mcproj TOPO --passes 3 --max-change 0.2 --save topo_duz
+    minecore surface decimate P.mcproj TOPO --tolerance 0.05 --save topo_seyrek
+    minecore surface from-grid P.mcproj lidar.asc --save LIDAR --tolerance 0.1
+    minecore surface to-grid P.mcproj TOPO --cell 2 --asc topo.asc
 """
 
 from __future__ import annotations
@@ -21,14 +27,27 @@ from typing import Any, TextIO
 import numpy as np
 
 from minecore import strings, surfaces
+from minecore import surfaceedit as se
 from minecore import surfacetools as st
 from minecore.io.dxf import Polyline, Text, write_dxf
 from minecore.project import Project
 
-ACTIONS = ("contours", "slope", "profile", "intersect", "offset")
+ACTIONS = (
+    "contours",
+    "slope",
+    "profile",
+    "intersect",
+    "offset",
+    "merge",
+    "normal-offset",
+    "smooth",
+    "decimate",
+    "from-grid",
+    "to-grid",
+)
 
 
-def add_parsers(sf_cmds: Any) -> None:
+def add_parsers(sf_cmds: Any) -> None:  # noqa: PLR0915 - one parser per action
     co = sf_cmds.add_parser("contours", help="contour lines of a surface (exact on triangles)")
     co.add_argument("project")
     co.add_argument("surface")
@@ -71,6 +90,47 @@ def add_parsers(sf_cmds: Any) -> None:
     of.add_argument("surface")
     of.add_argument("--dz", type=float, required=True, help="vertical shift, m (+ up)")
     of.add_argument("--save", required=True, help="name of the new surface")
+    me = sf_cmds.add_parser("merge", help="upper/lower envelope of two surfaces, or patch")
+    me.add_argument("project")
+    me.add_argument("a", help="surface a (the patch in --mode patch)")
+    me.add_argument("b", help="surface b")
+    me.add_argument(
+        "--mode",
+        choices=se.MODES,
+        required=True,
+        help="upper: higher of the two; lower: lower (pit into topography); patch: a over b",
+    )
+    me.add_argument("--tolerance", type=float, default=0.001, help="vertex merge distance, m")
+    me.add_argument("--save", required=True, help="name of the new surface")
+    no = sf_cmds.add_parser("normal-offset", help="move a surface along its normals")
+    no.add_argument("project")
+    no.add_argument("surface")
+    no.add_argument("--distance", type=float, required=True, help="m along the normal (+ up)")
+    no.add_argument("--max-factor", type=float, default=3.0, help="vertex move limit / distance")
+    no.add_argument("--save", required=True, help="name of the new surface")
+    sm = sf_cmds.add_parser("smooth", help="smooth elevations (planes stay planar)")
+    sm.add_argument("project")
+    sm.add_argument("surface")
+    sm.add_argument("--passes", type=int, default=1, help="smoothing passes")
+    sm.add_argument("--factor", type=float, default=0.5, help="share moved per pass, 0-1")
+    sm.add_argument("--max-change", type=float, help="cap on any vertex change, m")
+    sm.add_argument("--move-boundary", action="store_true", help="also smooth boundary vertices")
+    sm.add_argument("--save", required=True, help="name of the new surface")
+    de = sf_cmds.add_parser("decimate", help="fewer points within a vertical tolerance")
+    de.add_argument("project")
+    de.add_argument("surface")
+    de.add_argument("--tolerance", type=float, required=True, help="vertical tolerance, m")
+    de.add_argument("--save", required=True, help="name of the new surface")
+    fg = sf_cmds.add_parser("from-grid", help="surface from an ESRI ASCII grid (.asc)")
+    fg.add_argument("project")
+    fg.add_argument("grid", help=".asc file")
+    fg.add_argument("--tolerance", type=float, help="decimate to this vertical tolerance, m")
+    fg.add_argument("--save", required=True, help="name of the new surface")
+    tg = sf_cmds.add_parser("to-grid", help="surface elevations to an ESRI ASCII grid")
+    tg.add_argument("project")
+    tg.add_argument("surface")
+    tg.add_argument("--cell", type=float, required=True, help="cell size, m")
+    tg.add_argument("--asc", required=True, help="output .asc file")
 
 
 def contour_strings(cs: list[st.Contour]) -> list[strings.String]:
@@ -217,6 +277,73 @@ def _offset(project: Project, args: argparse.Namespace, out: TextIO) -> None:
     out.write(f"surface {args.save}: {args.surface} moved {args.dz:+g} m\n")
 
 
+def _merge(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    a = surfaces.load_surface(project, args.a)
+    b = surfaces.load_surface(project, args.b)
+    s, r = se.merge_surfaces(a, b, args.mode, tolerance=args.tolerance)
+    surfaces.save_surface(project, args.save, s)
+    out.write(
+        f"surface {args.save}: {args.mode} of {args.a} and {args.b}, {r.triangles} triangles; "
+        f"both {r.area_both:,.1f} m2 (from {args.a} {r.area_from_a:,.1f}, from {args.b} "
+        f"{r.area_from_b:,.1f}), only {args.a} {r.area_a_only:,.1f} m2, only {args.b} "
+        f"{r.area_b_only:,.1f} m2\n"
+    )
+
+
+def _normal_offset(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    s = surfaces.load_surface(project, args.surface)
+    o, r = se.normal_offset(s, args.distance, max_factor=args.max_factor)
+    surfaces.save_surface(project, args.save, o)
+    out.write(
+        f"surface {args.save}: {args.surface} offset {args.distance:+g} m along the normals, "
+        f"largest vertex move {r.max_move:.3f} m, {r.limited} vertices at the move limit\n"
+    )
+
+
+def _smooth(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    s = surfaces.load_surface(project, args.surface)
+    o, r = se.smooth_surface(
+        s,
+        args.passes,
+        args.factor,
+        max_change=args.max_change,
+        hold_boundary=not args.move_boundary,
+    )
+    surfaces.save_surface(project, args.save, o)
+    out.write(
+        f"surface {args.save}: {r.iterations} passes, change max {r.max_change:.3f} m, mean "
+        f"{r.mean_change:.3f} m, volume change {r.volume_change:+,.1f} m3, "
+        f"{r.limited} vertices at the change limit\n"
+    )
+
+
+def _decimate(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    s = surfaces.load_surface(project, args.surface)
+    o, r = se.decimate_surface(s, args.tolerance)
+    surfaces.save_surface(project, args.save, o)
+    out.write(
+        f"surface {args.save}: {r.points_before} -> {r.points_after} points, "
+        f"{r.triangles} triangles, largest vertical error {r.max_error:.4f} m "
+        f"(limit {r.tolerance:g} m)\n"
+    )
+
+
+def _from_grid(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    g = se.read_ascii_grid(Path(args.grid))
+    s, n = se.grid_surface(g, args.tolerance)
+    surfaces.save_surface(project, args.save, s)
+    out.write(
+        f"surface {args.save}: {g.z.shape[1]} x {g.z.shape[0]} grid of {g.cell:g} m, {n} cells "
+        f"with data, {len(s.points)} points, {len(s.triangles())} triangles\n"
+    )
+
+
+def _to_grid(project: Project, args: argparse.Namespace, out: TextIO) -> None:
+    g = st.surface_grid(surfaces.load_surface(project, args.surface), args.cell)
+    st.write_ascii_grid(Path(args.asc), g, g.z)
+    out.write(f"{args.asc}: {g.z.shape[1]} x {g.z.shape[0]} cells of {g.cell:g} m\n")
+
+
 def run(project: Project, args: argparse.Namespace, out: TextIO) -> bool:
     """Run a surface tool action; False when the action is not one of these."""
     handlers = {
@@ -225,6 +352,12 @@ def run(project: Project, args: argparse.Namespace, out: TextIO) -> bool:
         "profile": _profile,
         "intersect": _intersect,
         "offset": _offset,
+        "merge": _merge,
+        "normal-offset": _normal_offset,
+        "smooth": _smooth,
+        "decimate": _decimate,
+        "from-grid": _from_grid,
+        "to-grid": _to_grid,
     }
     handler = handlers.get(args.sf_command)
     if handler is None:

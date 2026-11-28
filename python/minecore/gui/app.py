@@ -380,6 +380,11 @@ class MainWindow(QMainWindow):
         action(surf, "Eğim ve bakı haritası...", self.surface_slope)
         action(surf, "Profil çıkar (bir hat boyunca yüzeyler)...", self.surface_profile)
         action(surf, "Yüzey kesişim çizgisi, yüzey öteleme...", self.surface_intersect)
+        action(
+            surf,
+            "Yüzey birleştir / yama, normal öteleme, yumuşat, incelt, ızgara...",
+            self.surface_edit,
+        )
         surf.addSeparator()
         action(surf, "Katı model (wireframe) içe aktar: OBJ, STL, DXF...", self.import_solid)
         action(surf, "Çizgileri içe aktar (DXF polyline, kesit yorumları)...", self.import_strings)
@@ -1425,6 +1430,9 @@ class MainWindow(QMainWindow):
 
     def surface_intersect(self) -> None:
         self._surface_tools("intersect")
+
+    def surface_edit(self) -> None:
+        self._surface_tools("edit")
 
     def survey(self) -> None:
         from minecore.gui.survey import SurveyDialog  # noqa: PLC0415

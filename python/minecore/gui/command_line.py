@@ -197,6 +197,7 @@ WORKBENCH_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("EGIM", "Eğim ve bakı haritası", "surface_slope"),
     ("PROFIL", "Profil çıkar (hat boyunca yüzeyler)", "surface_profile"),
     ("KESISIM", "Yüzey kesişim çizgisi, yüzey öteleme", "surface_intersect"),
+    ("YBIRLESTIR", "Yüzey birleştir/yama, normal öteleme, yumuşat, incelt, ızgara", "surface_edit"),
     ("KATIAL", "Katı model içe aktar", "import_solid"),
     ("KATIVER", "Katı modeli DXF olarak dışa aktar", "export_solid"),
     ("KATIARAC", "Katı model araçları", "solid_tools"),

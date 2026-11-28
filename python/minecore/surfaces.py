@@ -282,6 +282,53 @@ class SurfaceReport:
     crossings_split: int  # breakline crossings with agreeing elevations
     inserted: int  # vertices added on breaklines/boundary to make them triangle edges
     triangles: int
+    short_pieces_left: int = 0  # tiny pieces left unconstrained (tolerate_small_angles)
+
+
+def _box_pairs(box: Floats) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """Pairs i < j of plan boxes (xmin, ymin, xmax, ymax) that overlap.
+
+    A uniform grid of median box size: memory grows with the boxes, not with
+    the longest one (a few long hull edges no longer pair with everything).
+    """
+    empty = np.zeros(0, np.int64)
+    if len(box) < 2:
+        return empty, empty
+    ext = (box[:, 2:] - box[:, :2]).max(axis=1)
+    cell = float(np.median(ext))
+    if not cell > 0:
+        cell = max(float(ext.max()), 1.0)
+    lo = box[:, :2].min(axis=0)
+    i0 = np.floor((box[:, :2] - lo) / cell).astype(np.int64)
+    i1 = np.floor((box[:, 2:] - lo) / cell).astype(np.int64)
+    nx, ny = i1[:, 0] - i0[:, 0] + 1, i1[:, 1] - i0[:, 1] + 1
+    count = nx * ny
+    owner = np.repeat(np.arange(len(box)), count)
+    k = np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
+    key = (i0[owner, 0] + k % nx[owner]) * 4_000_003 + (i0[owner, 1] + k // nx[owner])
+    order = np.lexsort((owner, key))
+    key, owner = key[order], owner[order]
+    starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
+    sizes = np.diff(np.r_[starts, len(key)])
+    pi, pj = [], []
+    for size in np.unique(sizes[sizes > 1]):
+        grp = starts[sizes == size]
+        idx = owner[grp[:, None] + np.arange(size)[None, :]]
+        u, v = np.triu_indices(int(size), 1)
+        pi.append(idx[:, u].ravel())
+        pj.append(idx[:, v].ravel())
+    if not pi:
+        return empty, empty
+    i, j = np.concatenate(pi), np.concatenate(pj)
+    pair = np.unique(np.minimum(i, j) * len(box) + np.maximum(i, j))
+    i, j = pair // len(box), pair % len(box)
+    keep = (
+        (box[i, 0] <= box[j, 2])
+        & (box[j, 0] <= box[i, 2])
+        & (box[i, 1] <= box[j, 3])
+        & (box[j, 1] <= box[i, 3])
+    )
+    return i[keep], j[keep]
 
 
 def _segment_crossings(
@@ -292,15 +339,9 @@ def _segment_crossings(
     if len(segs) < 2:
         return empty, empty, np.zeros(0), np.zeros(0)
     a, b = p[segs[:, 0], :2], p[segs[:, 1], :2]
-    mid = 0.5 * (a + b)
-    half = 0.5 * np.linalg.norm(b - a, axis=1)
-    tree = cKDTree(mid)
-    pairs = tree.query_pairs(2.0 * float(half.max()) + tol, output_type="ndarray")
-    if len(pairs) == 0:
+    i, j = _box_pairs(np.column_stack([np.minimum(a, b) - tol, np.maximum(a, b) + tol]))
+    if len(i) == 0:
         return empty, empty, np.zeros(0), np.zeros(0)
-    i, j = pairs[:, 0], pairs[:, 1]
-    close = np.linalg.norm(mid[i] - mid[j], axis=1) <= half[i] + half[j] + tol
-    i, j = i[close], j[close]
     shared = (
         (segs[i, 0] == segs[j, 0])
         | (segs[i, 0] == segs[j, 1])
@@ -352,12 +393,19 @@ def _vertices_on(
     return spots, splits
 
 
-def _conform(
-    p: Floats, segs: npt.NDArray[np.int64], fixed: npt.NDArray[np.bool_], tol: float
+def _conform(  # noqa: PLR0915 - one loop, several blocking cases
+    p: Floats,
+    segs: npt.NDArray[np.int64],
+    fixed: npt.NDArray[np.bool_],
+    tol: float,
+    unhonoured: list[int] | None = None,
 ) -> tuple[Floats, npt.NDArray[np.int64], int, int]:
     """Split segments until each is a Delaunay edge; drop spot points lying on them.
 
-    Returns (points, segments, vertices inserted, spot points dropped).
+    Returns (points, segments, vertices inserted, spot points dropped). With
+    ``unhonoured`` (a list), pieces no longer than 4 x ``tol`` that stay blocked
+    by breakline vertices (breaklines meeting at a very small angle) are left
+    out instead of failing; their count is appended to the list.
     """
     inserted = dropped = 0
     for _ in range(64):
@@ -401,7 +449,15 @@ def _conform(
             block = {c for k, cand in enumerate(near) for c in cand if c not in ends[k]}
             spots = {c for c in block if not fixed[c]}
             if not spots:
-                break
+                if unhonoured is None:
+                    break
+                # Leave these few-tolerance pieces to the Delaunay triangulation.
+                idx = np.flatnonzero(~present)[short]
+                keep_seg = np.ones(len(segs), bool)
+                keep_seg[idx] = False
+                segs = segs[keep_seg]
+                unhonoured.append(len(idx))
+                continue
             keep = np.ones(len(p), bool)
             keep[list(spots)] = False
             remap = np.cumsum(keep) - 1
@@ -565,6 +621,7 @@ def build_surface(  # noqa: PLR0913 - surface inputs and the user's tolerances
     max_edge: float | None = None,
     tolerance: float = 0.001,
     z_tolerance: float = 0.001,
+    tolerate_small_angles: bool = False,
 ) -> tuple[Surface, SurfaceReport]:
     """Triangulated surface honouring breaklines, a trimming boundary and holes.
 
@@ -576,6 +633,9 @@ def build_surface(  # noqa: PLR0913 - surface inputs and the user's tolerances
     coincident vertices; breakline vertices win over spot points.
     ``z_tolerance`` (m) decides whether crossing breaklines agree in elevation.
     Every limit is the caller's choice (data precision, survey practice).
+    ``tolerate_small_angles``: breakline pieces no longer than 4 x ``tolerance``
+    that cannot be made triangle edges (breaklines meeting at a tiny angle) are
+    left to the triangulation instead of failing (counted in the report).
     """
     if not (tolerance > 0 and z_tolerance >= 0):
         raise SurfaceError("tolerances must be positive")
@@ -603,7 +663,8 @@ def build_surface(  # noqa: PLR0913 - surface inputs and the user's tolerances
         fixed = np.r_[fixed, np.ones(len(p) - len(fixed), bool)]
     if len(p) < 3:
         raise SurfaceError("a surface needs at least three distinct x, y points")
-    p, segs, inserted, on_lines = _conform(p, segs, fixed, tolerance)
+    skipped: list[int] | None = [] if tolerate_small_angles else None
+    p, segs, inserted, on_lines = _conform(p, segs, fixed, tolerance, skipped)
     rings = _clean_rings(boundary)
     if rings:
         p, more = _insert_rings(p, rings, tolerance)
@@ -618,6 +679,7 @@ def build_surface(  # noqa: PLR0913 - surface inputs and the user's tolerances
         crossings_split=crossings,
         inserted=inserted,
         triangles=len(surface.triangles()),
+        short_pieces_left=sum(skipped or []),
     )
     return surface, report
 
